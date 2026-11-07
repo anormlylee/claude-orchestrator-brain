@@ -4,6 +4,7 @@
 #   --styles-only  只装 output style（skill 已经通过 plugin 安装时用）
 #   --notify       另外安装派活卡片通知（仅 macOS 桌面 App，见 notify/）
 #   --guard        另外安装宽匹配杀进程守卫（拦 pkill -f / killall，见 guard/）
+#   --report-check 另外安装回报格式检查（分支会话发最终回报前检查格式，见 report-check/）
 # 已存在的非链接文件移到 ~/.claude/backups/claude-orchestrator-brain-<时间>/（放在 skills/ 里会被当成重复 skill 加载）
 set -euo pipefail
 
@@ -28,12 +29,14 @@ link() {
 STYLES_ONLY=0
 NOTIFY=0
 GUARD=0
+REPORT_CHECK=0
 for arg in "$@"; do
   case "$arg" in
     --styles-only) STYLES_ONLY=1 ;;
     --notify) NOTIFY=1 ;;
     --guard) GUARD=1 ;;
-    *) echo "未知参数：$arg（可用：--styles-only --notify --guard）"; exit 1 ;;
+    --report-check) REPORT_CHECK=1 ;;
+    *) echo "未知参数：$arg（可用：--styles-only --notify --guard --report-check）"; exit 1 ;;
   esac
 done
 
@@ -57,4 +60,9 @@ fi
 # --guard：杀进程守卫不打包进 plugin——它会全局禁掉 killall 等命令，影响所有项目，需显式选择
 if [ "$GUARD" = 1 ]; then
   "$REPO/guard/install.sh"
+fi
+
+# --report-check：回报格式检查不打包进 plugin——禁用说法清单按团队习惯写，需显式选择
+if [ "$REPORT_CHECK" = 1 ]; then
+  "$REPO/report-check/install.sh"
 fi
