@@ -1,6 +1,6 @@
 ---
 name: brain-handback
-description: Use when the user asks a discussion session (one not dispatched by the project's 主脑/brain session) to hand its conclusions back to the brain.
+description: Use when the user asks a discussion session (opened by the user, or by the project's 主脑/brain session at the user's request — not an implementation session) to hand its conclusions back to the brain.
 disable-model-invocation: true
 ---
 
