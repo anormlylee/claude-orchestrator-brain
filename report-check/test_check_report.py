@@ -7,7 +7,7 @@ HOOK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "check-report.py
 GOOD = """F-12 最终回报：完成，可以合入，召见改签式已落地
 
 【1. 需要决定】
-1. 旧接口是否保留；推荐：保留一周；不按推荐的代价：商户端两个页面会报错；能否撤回：能；阻塞：不阻塞；依据：实测 pm-front/src/api.ts:42
+1. 旧接口是否保留；类型：价值取舍；需求：商户端切换期间不报错；选项：立即删、保留一周、长期保留；推荐：保留一周；不按推荐的代价：商户端两个页面会报错；能否撤回：能；阻塞：不阻塞；依据：实测 pm-front/src/api.ts:42
 【2. 与派活设想的出入】
 1. 派活说表里没有 status 字段，实际有；依据：实测 migrations/012.sql:8；处理：沿用该字段
 【3. 遗留】无
@@ -64,6 +64,13 @@ class T(unittest.TestCase):
         self.assertIn("第 1 栏第 1 项缺：撤回、阻塞", r)
         r = run(GOOD.replace("；依据：实测 pm-front/src/api.ts:42", ""))
         self.assertIn("依据", r)
+        r = run(GOOD.replace("需求：商户端切换期间不报错；选项：立即删、保留一周、长期保留；", ""))
+        self.assertIn("第 1 栏第 1 项缺：需求、选项", r)
+
+    def test_decision_type(self):
+        self.assertIsNone(run(GOOD.replace("类型：价值取舍", "类型：技术裁决")))
+        r = run(GOOD.replace("类型：价值取舍", "类型：随便"))
+        self.assertIn("类型只能是", r)
 
     def test_mismatch_evidence(self):
         r = run(GOOD.replace("依据：实测 migrations/012.sql:8；", ""))

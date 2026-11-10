@@ -9,7 +9,8 @@ import json, os, re, sys
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 EVIDENCE = ("实测", "推断", "未核实")
-DECISION_FIELDS = ("推荐", "代价", "撤回", "阻塞")
+DECISION_FIELDS = ("类型", "需求", "选项", "推荐", "代价", "撤回", "阻塞")
+DECISION_TYPES = ("价值取舍", "技术裁决")
 SECTION = re.compile(r"【\s*(\d)(?:\s*[–—\-~～至]\s*(\d))?\s*[.．、]?\s*([^】]*)】")
 ITEM = re.compile(r"^\s*\d+\s*[.．、]", re.M)
 
@@ -70,6 +71,8 @@ def check(msg):
                 miss.append("依据（实测 / 推断 / 未核实）")
             if miss:
                 problems.append(f"第 1 栏第 {n} 项缺：{'、'.join(miss)}。")
+            elif not any(t in it for t in DECISION_TYPES):
+                problems.append(f"第 1 栏第 {n} 项的类型只能是「价值取舍」或「技术裁决」：技术选择交主脑裁决，价值取舍才交用户。")
     if 2 in secs:
         for n, it in enumerate(items(secs[2][1]), 1):
             if not any(e in it for e in EVIDENCE):
