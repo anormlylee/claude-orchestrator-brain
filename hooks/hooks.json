@@ -1,0 +1,19 @@
+{
+  "modules": ["./register.tsx"],
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [
+        { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-run.py\" kill-guard python3 \"${CLAUDE_PLUGIN_ROOT}/guard/block-broad-kill.py\"", "timeout": 10 },
+        { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/guard/redline.py\"", "timeout": 10 }
+      ] },
+      { "matcher": "SendMessage", "hooks": [
+        { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-run.py\" report-check python3 \"${CLAUDE_PLUGIN_ROOT}/report-check/check-report.py\"", "timeout": 10 }
+      ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Write|Edit|MultiEdit", "hooks": [
+        { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-run.py\" check-cards python3 \"${CLAUDE_PLUGIN_ROOT}/board/check-cards.py\"", "timeout": 10 }
+      ] }
+    ]
+  }
+}

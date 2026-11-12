@@ -25,40 +25,47 @@
 
 ## 文件
 
+仓库根目录就是一个插件：技能、看板、钩子一起装、一起升级。
+
 ```
-.claude-plugin/          plugin 与 marketplace 清单
+.claude-plugin/          插件与插件市场清单
 skills/brain/
   SKILL.md               主流程：开局、台账、派活、接收交回、验收、合入、周切换、红线
   dispatch-template.md   派活提示模板 + 分支回报格式
   ledger-template.md     cards / ledger / decisions / 周流水 / handoff / inbox 模板
 skills/brain-handback/
   SKILL.md               讨论会话把结论分类、写成文档、交回主脑
-output-styles/brain.md   主脑角色约束（常驻系统提示）
-install.sh               软链接安装
-notify/                  可选：派活卡片通知（仅 macOS 桌面 App）
-  install.sh             编译通知器、装 hook
-  ClaudeNotify.applescript  通知器源码
-  spawn-task-notify.sh   PreToolUse / PostToolUse hook 脚本
-guard/                   可选：宽匹配杀进程守卫（所有环境）
-  install.sh             软链接脚本、装 hook
-  block-broad-kill.py    PreToolUse hook 脚本
-  test_block_broad_kill.py  用例
-report-check/            可选：回报格式检查（所有环境）
-  install.sh             软链接脚本、装 hook
-  check-report.py        PreToolUse(SendMessage) hook 脚本
+output-styles/brain.md   主脑角色约束（常驻系统提示；插件里的 output style 会带前缀，所以由 install.sh 单独装）
+hooks/
+  hooks.json             插件的钩子配置：看板模组 + 下面四个命令钩子
+  register.tsx           项目看板（输入 /board 打开）
+types/index.d.ts         看板的状态声明
+tests/board.test.tsx     看板用例（claude plugin test .）
+guard/
+  block-broad-kill.py    杀进程守卫：拦 pkill -f、killall
+  redline.py             红线守卫：拦强制推送主分支；拦对本机登记的生产环境做写操作（只读不拦）
+  test_*.py              用例
+report-check/
+  check-report.py        分支回报格式检查（发 SendMessage 前）
   banned-phrases.txt     禁用的含糊说法，按团队习惯增删
   test_check_report.py   用例
-board/                   可选：项目看板（Claude Code 桌面版面板，所有项目共用）
-  install.sh             挂看板、装卡片检查 hook、建本机登记表
-  mod/                   看板源码（输入 /board 打开）
+board/
   cards-format.md        卡片文件格式
-  check-cards.py         卡片格式检查：命令行，或 PostToolUse hook
+  check-cards.py         卡片格式检查：命令行，或保存后的钩子
   test_check_cards.py    用例
+scripts/
+  hook-run.py            钩子统一记录：拦截和出错写进 ~/.claude/logs/hooks.log，闸坏了能被发现
+  test_hook_run.py       用例
+install.sh               本机安装（见下）
+notify/                  可选，不在插件里：派活卡片通知（仅 macOS 桌面 App，./install.sh --notify）
+docs/                    诊断、设计文档
 ```
+
+本机私有数据不进仓库：看板登记表 `~/.claude/board/projects.json`，生产环境清单 `~/.claude/redlines.json`（红线守卫据此判断哪些主机是生产）。
 
 ## 安装
 
-**方式一：plugin（推荐给只用不改的人）**
+**方式一：插件市场（只用不改）**
 
 在 Claude Code 里执行：
 
@@ -67,7 +74,7 @@ board/                   可选：项目看板（Claude Code 桌面版面板，�
 /plugin install orchestrator@claude-orchestrator-brain
 ```
 
-plugin 目前不支持打包 output style，所以 output style 需要另外装一次：
+output style 需要另外装一次：
 
 ```bash
 git clone https://github.com/Anormallylee/claude-orchestrator-brain.git
@@ -75,9 +82,7 @@ cd claude-orchestrator-brain
 ./install.sh --styles-only
 ```
 
-用 plugin 安装后，命令名会带上前缀：`/orchestrator:brain`、`/orchestrator:brain-handback`。
-
-**方式二：软链接（适合要改 skill 的人）**
+**方式二：本机目录（要改的人）**
 
 ```bash
 git clone https://github.com/Anormallylee/claude-orchestrator-brain.git
@@ -85,9 +90,9 @@ cd claude-orchestrator-brain
 ./install.sh
 ```
 
-任何环境都可以加 `--guard`、`--report-check`、`--board`，顺带装杀进程守卫、回报格式检查、项目看板。skill 和 output style 都会以软链接的形式装到 `~/.claude/` 下，命令名是 `/brain`、`/brain-handback`。在仓库里改文件，本机立即生效。已经存在的同名文件会移到 `~/.claude/backups/`。
+把仓库目录加进 `~/.claude/settings.json` 的 `env.CLAUDE_CODE_PLUGIN_DIRS`，装 output style，建两份私有数据文件，并清掉旧版逐个软链接、逐条挂钩子留下的东西。在仓库里改文件，新开的会话就用上新版本。卸载：`./install.sh --uninstall`。
 
-两种方式只选一种。都装的话，菜单里会出现两份同样的 skill。
+两种方式只选一种。命令名都是 `/brain`、`/brain-handback`、`/board`（技能用 `name` 字段保留了不带前缀的命令名）。
 
 ## 使用
 
@@ -152,7 +157,7 @@ cd claude-orchestrator-brain
 
 **限制**：仅 macOS 桌面 App（hook 脚本在其他平台会静默跳过）；Windows 桌面 App 需要另写 PowerShell 版本，欢迎 PR。点通知只会把 Claude 切到前台，不会精确跳到发出卡片的那个会话。依赖 `jq`（`brew install jq`）。
 
-## 可选：宽匹配杀进程守卫
+## 守卫：杀进程与红线
 
 并行开的会话越多，你不盯着的子代理越多。真实发生过的一次：某个子代理想结束一个卡住的 `cat`，执行了
 
@@ -173,15 +178,12 @@ pkill -f "cat" -n
 前面加 `sudo`、`env`、变量赋值、绝对路径，或者用 `;` `&&` `|` 串在别的命令后面，都照样拦。被拦时 hook 会把原因和替代做法返回给模型（先 `pgrep -fl` 确认 PID 再 `kill <PID>`），会话不会卡住。
 
 ```bash
-./install.sh --guard                   # 软链接安装的用户
-./install.sh --styles-only --guard     # plugin 安装的用户
-./guard/install.sh --uninstall         # 卸载
 python3 guard/test_block_broad_kill.py # 跑用例
 ```
 
-安装脚本会把 hook 脚本软链接到 `~/.claude/hooks/guard/`，并往 `~/.claude/settings.json` 合并一条 `PreToolUse` hook（matcher 为 `Bash`）。已经有就跳过，改动前先备份。
+随插件安装，默认开启。它会全局禁掉 `killall` 这类命令，影响所有项目；工作流里有合理用法（比如 `killall Dock`）的，在插件设置里把「杀进程守卫」关掉。
 
-**为什么不打包进 plugin**：它会全局禁掉 `killall` 这类命令，影响你所有项目，而不只是用主脑的项目。有人的工作流里会有合理用法（比如 `killall Dock`），所以由用户显式选择。
+**红线守卫**（`guard/redline.py`，同样随插件安装）：强制推送到 main / master 一律拦；对 `~/.claude/redlines.json` 里登记的生产主机做写操作（上传文件、重启服务、改库等）时拦下，要用户在对话里同意后，命令说明写明“已在对话中同意”才放行。只读操作不拦。清单为空时只管强制推送。
 
 **限制**：
 - 按文本规则匹配，防的是随手写出的危险命令，不防刻意绕过（例如 `python -c` 里调 `os.system`）。
@@ -189,7 +191,7 @@ python3 guard/test_block_broad_kill.py # 跑用例
 - 只管 Claude Code 自己执行的命令，管不到其他 AI 工具和你在终端里敲的命令。
 - 依赖 `python3` 和 `jq`。macOS 上没装命令行开发者工具时，`python3` 只是占位程序，安装脚本会检测并拒绝安装，避免装上一个静默失效的 hook。
 
-## 可选：回报格式检查
+## 回报格式检查
 
 分支会话用 `SendMessage` 发出第一行含「最终回报：」的消息时，这个 hook 先按派活模板「回报格式」检查一遍：
 - 第一行写明完成 / 部分完成 / 卡住；
@@ -200,13 +202,10 @@ python3 guard/test_block_broad_kill.py # 跑用例
 不合格就拒绝发送，并把问题逐条返回给模型，模型改好后重发。别的消息一律放行，检查程序出错也放行。
 
 ```bash
-./install.sh --report-check                   # 软链接安装的用户
-./install.sh --styles-only --report-check     # plugin 安装的用户
-./report-check/install.sh --uninstall         # 卸载
 python3 report-check/test_check_report.py     # 跑用例
 ```
 
-**为什么不打包进 plugin**：禁用说法清单是按中文团队的习惯写的，别的团队需要先改清单再用。
+随插件安装，默认开启。禁用说法清单是按中文团队的习惯写的，别的团队先改清单，或在插件设置里把「回报格式检查」关掉。
 
 **限制**：只查格式，不查内容真假。模型完全可能在每栏里填上合规的空话，或者把推断标成实测；主脑验收时抽查实测项（见 `skills/brain/SKILL.md`「验收」）才是兜底。
 
@@ -228,9 +227,9 @@ python3 report-check/test_check_report.py     # 跑用例
 
 **派活卡片通知**：仅 macOS 桌面 App 适用（新旧版都支持）；其他环境不需要。
 
-**杀进程守卫**（`--guard`）：hook 在所有 Claude Code 环境里都生效；在 macOS 桌面 App 上已实测。安装脚本是 bash，Windows 需要手动配置。
+**杀进程守卫**：hook 在所有 Claude Code 环境里都生效；在 macOS 桌面 App 上已实测。安装脚本是 bash，Windows 需要手动配置。
 
-**回报格式检查**（`--report-check`）：在有 `SendMessage` 工具的环境里生效；没有这个工具时，分支会话把回报交给用户转发，hook 不会触发，靠主脑打回。
+**回报格式检查**：在有 `SendMessage` 工具的环境里生效；没有这个工具时，分支会话把回报交给用户转发，hook 不会触发，靠主脑打回。
 
 **桌面 App 专属的工具**（名字带 `ccd_` 前缀）：`start_session`（开新会话派活，旧版叫 `spawn_task`）、`list_sessions` / `get_session` / `archive_session`（盘点和归档会话；`list_sessions` 加 `linked: true` 只列本会话派出的会话）、`set_session_output_style`（切 output style）。其他环境里没有这些工具，skill 会自动退回手动方式，不会报错停下。
 

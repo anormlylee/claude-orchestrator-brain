@@ -20,7 +20,7 @@ const PROJECT = {
 
 const pane = (bodyColumns: number) =>
   ({
-    plugin: 'board', component: 'Pane', requestId: 'board',
+    plugin: 'orchestrator', component: 'Pane', requestId: 'board',
     props: { title: '项目看板', isFocused: false, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
   }) as const
 

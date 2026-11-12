@@ -11,12 +11,12 @@ const REGISTRY = '/Users/jiali/.claude/board/projects.json'
 const VISITS = 'board:lastVisit'
 const DAY = 86_400_000
 
-const open = atom({ plugin: 'board', key: 'open' } as const, '')
-const colTab = atom({ plugin: 'board', key: 'col' } as const, 'todo')
-const showActs = atom({ plugin: 'board', key: 'showActs' } as const, false)
-const showFrozen = atom({ plugin: 'board', key: 'showFrozen' } as const, false)
-const prevVisit = atom({ plugin: 'board', key: 'prevVisit' } as const, 0)
-const rev = atom({ plugin: 'board', key: 'rev' } as const, 0)
+const open = atom({ plugin: 'orchestrator', key: 'open' } as const, '')
+const colTab = atom({ plugin: 'orchestrator', key: 'col' } as const, 'todo')
+const showActs = atom({ plugin: 'orchestrator', key: 'showActs' } as const, false)
+const showFrozen = atom({ plugin: 'orchestrator', key: 'showFrozen' } as const, false)
+const prevVisit = atom({ plugin: 'orchestrator', key: 'prevVisit' } as const, 0)
+const rev = atom({ plugin: 'orchestrator', key: 'rev' } as const, 0)
 
 // ---------- 配色：实心色块给“球在谁”，浅底色块给类型和阶段 ----------
 const C = {

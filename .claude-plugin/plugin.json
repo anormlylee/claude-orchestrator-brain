@@ -1,7 +1,7 @@
 {
   "name": "orchestrator",
-  "version": "0.3.0",
-  "description": "让一个 Claude Code 会话当主脑：派活、独立验收、合入、记账；讨论会话把结论交回主脑",
+  "version": "0.4.0",
+  "description": "让一个 Claude Code 会话当主脑：派活、独立验收、合入、记账；讨论会话把结论交回主脑；附项目看板与守卫钩子",
   "author": {
     "name": "Anormallylee",
     "url": "https://github.com/Anormallylee"
@@ -15,5 +15,21 @@
     "multi-agent",
     "brain",
     "主脑"
-  ]
+  ],
+  "types": "./types/index.d.ts",
+  "outputStyles": [],
+  "userConfig": {
+    "kill_guard": {
+      "type": "boolean",
+      "title": "杀进程守卫",
+      "description": "拦 pkill -f、killall 这类按名字批量杀进程的命令",
+      "default": true
+    },
+    "report_check": {
+      "type": "boolean",
+      "title": "回报格式检查",
+      "description": "分支会话发最终回报前按派活模板检查格式；禁用说法清单按中文团队习惯写",
+      "default": true
+    }
+  }
 }

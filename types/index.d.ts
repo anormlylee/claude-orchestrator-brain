@@ -35,7 +35,7 @@ export type Registry = { projects: RegistryEntry[] }
 
 declare module 'claude-code' {
   interface PluginState {
-    board: {
+    orchestrator: {
       open: string
       col: string
       showActs: boolean
