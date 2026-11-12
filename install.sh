@@ -5,6 +5,7 @@
 #   --notify       另外安装派活卡片通知（仅 macOS 桌面 App，见 notify/）
 #   --guard        另外安装宽匹配杀进程守卫（拦 pkill -f / killall，见 guard/）
 #   --report-check 另外安装回报格式检查（分支会话发最终回报前检查格式，见 report-check/）
+#   --board        另外安装项目看板（/board 面板，加卡片文件保存后检查，见 board/）
 # 已存在的非链接文件移到 ~/.claude/backups/claude-orchestrator-brain-<时间>/（放在 skills/ 里会被当成重复 skill 加载）
 set -euo pipefail
 
@@ -30,13 +31,15 @@ STYLES_ONLY=0
 NOTIFY=0
 GUARD=0
 REPORT_CHECK=0
+BOARD=0
 for arg in "$@"; do
   case "$arg" in
     --styles-only) STYLES_ONLY=1 ;;
     --notify) NOTIFY=1 ;;
     --guard) GUARD=1 ;;
     --report-check) REPORT_CHECK=1 ;;
-    *) echo "未知参数：$arg（可用：--styles-only --notify --guard --report-check）"; exit 1 ;;
+    --board) BOARD=1 ;;
+    *) echo "未知参数：$arg（可用：--styles-only --notify --guard --report-check --board）"; exit 1 ;;
   esac
 done
 
@@ -65,4 +68,9 @@ fi
 # --report-check：回报格式检查不打包进 plugin——禁用说法清单按团队习惯写，需显式选择
 if [ "$REPORT_CHECK" = 1 ]; then
   "$REPO/report-check/install.sh"
+fi
+
+# --board：看板不打包进 plugin——它改全局插件目录变量，并给所有会话挂保存后检查的钩子，需显式选择
+if [ "$BOARD" = 1 ]; then
+  "$REPO/board/install.sh"
 fi

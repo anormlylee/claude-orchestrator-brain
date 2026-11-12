@@ -1,0 +1,6 @@
+{
+  "name": "board",
+  "version": "1.0.0",
+  "description": "项目看板：按项目看各主脑的卡片，只提醒和查看，要动作就进主脑会话。输入 /board 打开",
+  "types": "./types/index.d.ts"
+}

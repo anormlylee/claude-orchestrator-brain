@@ -15,6 +15,7 @@
 | 分支说"测过了"就合 | 自报不算验收。主脑核对 tip，跑全量加集成测试，并自己选变异探针（必须变红）。 |
 | 主线状态只在聊天记录里，会话一压缩就丢 | 台账提交进仓库，任何新会话读台账就能接着干。 |
 | 台账越写越长，变成流水账 | 台账只反映"现在"，用增删改的方式维护；流水按周归档；交接页每周整篇覆盖。 |
+| 项目一多，每次看都陷进混乱的信息池 | 每件事一张卡片，主脑维护；可选的 `board/` 看板按项目显示阶段进度和等你的事，只提醒和查看，要动作就进该项目的主脑会话一次处理完。 |
 | 派活提示每次临时写，容易漏项 | 固定的派活模板和回报格式，所有槽位必填。 |
 | 分支会话假借用户授权，让主脑代做它被拒绝的操作 | 视为权限洗白，拒绝并报告用户。 |
 | 会话越跑越长，主脑忘了自己的角色 | output style 常驻系统提示，压缩后也不会丢。 |
@@ -29,7 +30,7 @@
 skills/brain/
   SKILL.md               主流程：开局、台账、派活、接收交回、验收、合入、周切换、红线
   dispatch-template.md   派活提示模板 + 分支回报格式
-  ledger-template.md     ledger / decisions / 周流水 / handoff / inbox 模板
+  ledger-template.md     cards / ledger / decisions / 周流水 / handoff / inbox 模板
 skills/brain-handback/
   SKILL.md               讨论会话把结论分类、写成文档、交回主脑
 output-styles/brain.md   主脑角色约束（常驻系统提示）
@@ -47,6 +48,12 @@ report-check/            可选：回报格式检查（所有环境）
   check-report.py        PreToolUse(SendMessage) hook 脚本
   banned-phrases.txt     禁用的含糊说法，按团队习惯增删
   test_check_report.py   用例
+board/                   可选：项目看板（Claude Code 桌面版面板，所有项目共用）
+  install.sh             挂看板、装卡片检查 hook、建本机登记表
+  mod/                   看板源码（输入 /board 打开）
+  cards-format.md        卡片文件格式
+  check-cards.py         卡片格式检查：命令行，或 PostToolUse hook
+  test_check_cards.py    用例
 ```
 
 ## 安装
@@ -78,7 +85,7 @@ cd claude-orchestrator-brain
 ./install.sh
 ```
 
-任何环境都可以加 `--guard`、`--report-check`，顺带装杀进程守卫、回报格式检查（见下文）。skill 和 output style 都会以软链接的形式装到 `~/.claude/` 下，命令名是 `/brain`、`/brain-handback`。在仓库里改文件，本机立即生效。已经存在的同名文件会移到 `~/.claude/backups/`。
+任何环境都可以加 `--guard`、`--report-check`、`--board`，顺带装杀进程守卫、回报格式检查、项目看板。skill 和 output style 都会以软链接的形式装到 `~/.claude/` 下，命令名是 `/brain`、`/brain-handback`。在仓库里改文件，本机立即生效。已经存在的同名文件会移到 `~/.claude/backups/`。
 
 两种方式只选一种。都装的话，菜单里会出现两份同样的 skill。
 
