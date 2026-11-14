@@ -5,6 +5,7 @@ import type { Card, Column, Project, Registry, RegistryEntry } from '../types'
 
 // 项目看板：第一层是项目总览，点项目进入单项目看板。
 // 只提醒和查看：没有输入，要动作就进该项目的主脑会话，一次处理完。
+// 每张卡片有“带去主脑”：复制卡片内容并跳到主脑会话，到了按 ⌘V 粘贴，不用重打任务描述。
 
 const PANE = 'board'
 const REGISTRY = '/Users/jiali/.claude/board/projects.json'
@@ -199,6 +200,41 @@ const visitText = (ms: number) => {
   return `${days(Date.now() - ms)} 天前来看过`
 }
 
+// ---------- 带去主脑：把卡片整理成一段话放进剪贴板，再跳到该项目的主脑会话 ----------
+// 插件只能往自己所在会话的输入框填字，主脑会话又认不出“这是发给我的”，所以走剪贴板：到了主脑按 ⌘V。
+const COLUMN_LABEL: Record<Column, string> = { todo: '待办', doing: '进行中', verify: '待验收', done: '已完成', frozen: '冻结' }
+const brainLink = (p: Project) => `claude://claude.ai/epitaxy/${p.brain.id}`
+type Surface = Parameters<EngineInterface['ui']['copy']>[0]['surface']
+
+function handoffText(p: Project, c: Card): string {
+  const status: string[] = [COLUMN_LABEL[c.column], c.kind]
+  if (c.priority !== null) status.push(`P${c.priority}`)
+  if (c.milestone) status.push('阶段目标')
+  const lines = [`关于看板卡片「${c.title}」（${p.project}，卡片编号 ${c.id}）`, `- 状态：${status.join('，')}`]
+  if (c.now !== '') lines.push(`- 现状：${c.now}`)
+  if (c.ball === 'you' && c.column !== 'done' && c.ask !== '') {
+    lines.push(`- 等我${c.askKind === 'decide' ? '拍板' : '动手'}：${c.ask}`)
+  }
+  if (c.ball === 'external' && c.column !== 'done') lines.push('- 在等外部')
+  if (c.blocked !== '') lines.push(`- 阻塞：${c.blocked}`)
+  lines.push('', '我的指示：')
+  return lines.join('\n')
+}
+
+async function handoff($: EngineInterface, p: Project, c: Card, surface: Surface) {
+  const text = handoffText(p, c)
+  // 先用系统剪贴板命令（桌面 App 和终端都可靠），不行再用界面自带的复制
+  // 不指定 UTF-8 时 pbcopy 会把中文悄悄丢掉（实测：退出码 0，剪贴板为空）
+  let copied = await $.process.run(['pbcopy'], { stdin: text, env: { LANG: 'en_US.UTF-8' }, timeoutMs: 5000 })
+    .then(r => r.exitCode === 0, () => false)
+  if (!copied) copied = await $.ui.copy({ text, surface }).then(r => r.isCopied, () => false)
+  const jumped = await $.process.run(['open', brainLink(p)], { timeoutMs: 5000 })
+    .then(r => r.exitCode === 0, () => false)
+  if (copied && jumped) $.ui.toast(`已复制卡片「${c.title}」，到主脑会话后按 ⌘V 粘贴`)
+  else if (copied) $.ui.toast('已复制卡片，但没能自动跳转：请点项目上方的“进入主脑会话”，再按 ⌘V')
+  else $.ui.toast('复制失败：剪贴板不可用')
+}
+
 const byPriority = (a: Card, b: Card) =>
   (a.priority ?? 9) - (b.priority ?? 9) || (a.ball === 'you' ? 0 : 1) - (b.ball === 'you' ? 0 : 1)
 
@@ -341,9 +377,13 @@ export const register: Register = on => {
                 <Text size="footnote">{c.blocked}</Text>
               </Box>
             )}
-            {d !== undefined && c.column !== 'done' && (
-              <Text size="caption" dimColor>在这一列 {d} 天</Text>
-            )}
+            <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="center">
+              <Button key={`handoff:${c.id}`} plain label="带去主脑 ›"
+                onPress={press => handoff($, p, c, press.surface)} />
+              {d !== undefined && c.column !== 'done' && (
+                <Text size="caption" dimColor>在这一列 {d} 天</Text>
+              )}
+            </Box>
           </Box>
         )
       }
@@ -395,7 +435,7 @@ export const register: Register = on => {
               {act.isStale ? pill(act.text, C.red) : <Text size="caption" dimColor>{act.text}</Text>}
               <Text size="caption" dimColor>· {visitText(prev)} · 冻结 {s.frozen} · 遗留 {p.leftovers}</Text>
             </Box>
-            <Link href={`claude://claude.ai/epitaxy/${p.brain.id}`} label={`→ 进入主脑会话：${p.brain.name}`} />
+            <Link href={brainLink(p)} label={`→ 进入主脑会话：${p.brain.name}`} />
           </Box>
 
           {n === 1 && (

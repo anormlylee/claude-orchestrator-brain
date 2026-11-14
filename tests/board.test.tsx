@@ -65,3 +65,47 @@ test('总览按项目显示，点项目进入单项目看板再返回', async ($
     }
   }
 })
+
+test('卡片“带去主脑”：复制卡片内容并跳到主脑会话', async ($, on) => {
+  on('fs.read', (_, e) => {
+    const path = String((e as { path?: unknown }).path ?? '')
+    if (path.endsWith('projects.json')) return { value: JSON.stringify({ projects: [REG.projects[0]] }) }
+    if (path.endsWith('demo.json')) return { value: JSON.stringify(PROJECT) }
+    return { value: '' }
+  })
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: Date.now() } }))
+  let store: unknown = undefined
+  on('store.get', () => ({ value: store }))
+  on('store.set', (_, e) => {
+    store = (e as { value?: unknown }).value
+    return { value: undefined }
+  })
+  const runs: { argv: readonly string[]; stdin?: string; lang?: string }[] = []
+  on('process.run', (_, e) => {
+    const { argv, init } = e as { argv: readonly string[]; init?: { stdin?: string; env?: Record<string, string> } }
+    runs.push({ argv, stdin: init?.stdin, lang: init?.env?.LANG })
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
+  const toasts: string[] = []
+  on('ui.toast', (_, e) => {
+    toasts.push((e as { text: string }).text)
+    return { value: undefined }
+  })
+
+  const ui = await $.ui.mount({ ...pane(140), surface: 'desktop' })
+  await ui.press({ key: 'enter:demo' })
+  expect(await ui.find({ type: 'Button', label: /带去主脑/ })).toBeTruthy()
+  await ui.press({ key: 'handoff:a' })
+  for (let i = 0; i < 50 && toasts.length === 0; i++) await new Promise(r => setTimeout(r, 10))
+
+  const copy = runs.find(r => r.argv[0] === 'pbcopy')
+  expect(copy?.stdin).toContain('关于看板卡片「定方案」（演示项目，卡片编号 a）')
+  expect(copy?.stdin).toContain('- 状态：待办，决策，P1，阶段目标')
+  expect(copy?.stdin).toContain('- 现状：三个选项')
+  expect(copy?.stdin).toContain('- 等我拍板：拍板方案')
+  expect(copy?.stdin).toContain('我的指示：')
+  expect(copy?.lang).toContain('UTF-8')
+  expect(runs.find(r => r.argv[0] === 'open')?.argv[1]).toBe('claude://claude.ai/epitaxy/local_abc')
+  expect(toasts[0]).toContain('⌘V')
+  await ui.unmount()
+})
