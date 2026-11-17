@@ -15,14 +15,16 @@ KINDS = ("功能", "缺陷", "调研", "决策", "事务")
 BALLS = ("you", "external", "brain")
 ASK_KINDS = ("decide", "act")
 TOP_KEYS = ("project", "stage", "stageGoal", "brain", "leftovers", "cards")
+TOP_OPTIONAL = ("generatedBy", "stats")
 CARD_KEYS = ("id", "title", "column", "kind", "priority", "milestone", "ball",
              "ask", "askKind", "now", "blocked", "since", "doneAt")
-CARD_OPTIONAL = ("detail", "rejects", "causedBy")
+CARD_OPTIONAL = ("detail", "rejects", "causedBy", "sessions", "evidence")
 TITLE_MAX = 20
 ASK_MAX = 40
 NOW_MAX = 40
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HOOK_SUFFIX = os.path.join("brain", "cards.json")
+EVENTS_SUFFIX = os.path.join("brain", "events.jsonl")
 
 
 def is_str(v):
@@ -129,6 +131,10 @@ def check_card(c, where, today, has_goal):
             problems.append(f"{where}：causedBy 要写引入这个问题的那张卡的编号；不是返工就不写这个字段。")
         elif c.get("kind") != "缺陷":
             problems.append(f"{where}：只有缺陷卡能写 causedBy（合入后才发现的问题，指向引入它的卡）。")
+    if "sessions" in c and (not isinstance(c.get("sessions"), list) or not all(is_str(x) and x for x in c["sessions"])):
+        problems.append(f"{where}：sessions 要是会话编号的列表。")
+    if "evidence" in c and not is_str(c.get("evidence")):
+        problems.append(f"{where}：evidence 要是验证产物的路径。")
     return problems
 
 
@@ -141,7 +147,7 @@ def check_data(data, today=None):
     missing = [k for k in TOP_KEYS if k not in data]
     if missing:
         problems.append(f"顶层缺字段 {'、'.join(missing)}。")
-    unknown = [k for k in data if k not in TOP_KEYS]
+    unknown = [k for k in data if k not in TOP_KEYS + TOP_OPTIONAL]
     if unknown:
         problems.append(f"顶层多了不认识的字段 {'、'.join(unknown)}。")
 
@@ -200,6 +206,19 @@ def hook():
         if event.get("tool_name") not in ("Write", "Edit", "MultiEdit"):
             return
         path = (event.get("tool_input") or {}).get("file_path") or ""
+        if not (path.endswith(HOOK_SUFFIX) or path.endswith(EVENTS_SUFFIX)):
+            return
+        if event.get("hook_event_name") == "PreToolUse":
+            # 卡片文件由 card 命令根据事件生成，手改会被下一条命令覆盖，也会丢掉历史
+            json.dump({"hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": (
+                    "卡片文件和事件记录不能手改：用卡片命令记事，它会追加事件并重新生成 cards.json。"
+                    "命令：python3 ~/.claude/bin/card <子命令>，比如 new、dispatch、verify、reject、done、ask、answer；"
+                    "python3 ~/.claude/bin/card --help 看全部。说明见 claude-orchestrator-brain 仓库的 board/cards-format.md。"),
+            }}, sys.stdout, ensure_ascii=False)
+            return
         if not path.endswith(HOOK_SUFFIX):
             return
         problems = check_file(path)

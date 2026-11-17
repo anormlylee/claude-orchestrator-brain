@@ -4,7 +4,8 @@
 
 ```
 brain/
-  cards.json       卡片：每件正式事项一张，看板读它（增删改）
+  events.jsonl     卡片的事件记录（只用卡片命令追加）
+  cards.json       由事件生成的卡片，看板读它（不手改）
   ledger.md        规则、遗留小项、环境（增删改）
   decisions.md     仍然有效的决定（增删改）
   handoff.md       下周开工第一屏（每周整篇覆盖）
@@ -12,27 +13,22 @@ brain/
   inbox/           讨论会话交回的文档（主脑处理完就删）
 ```
 
-## cards.json
+## 卡片
 
-格式见 claude-orchestrator-brain 仓库的 `board/cards-format.md`，要点见 SKILL.md「卡片」。新项目从这里起步：
+用卡片命令建立，不手写：
 
-```json
-{
-  "project": "<项目名>",
-  "stage": null,
-  "stageGoal": null,
-  "brain": { "name": "<主脑会话名>", "id": "<主脑会话编号 local_…>" },
-  "leftovers": 0,
-  "cards": []
-}
+```bash
+python3 ~/.claude/bin/card --dir <项目>/docs/brain init --project <项目名> --brain-name <主脑会话名> --brain-id <主脑会话编号 local_…>
 ```
+
+之后的建卡、派活、打回、合入都用这个命令，见 SKILL.md「卡片」和 claude-orchestrator-brain 仓库的 `board/cards-format.md`。
 
 ## ledger.md
 
 ```markdown
 # 台账（主脑维护，反映"现在"）
 
-在飞、待拍板、队列都在同目录的 cards.json 里，这里只放规则、遗留小项和环境。
+在飞、待拍板、队列都在同目录的卡片里（卡片命令维护），这里只放规则、遗留小项和环境。
 
 ## 0. 规则
 当前主脑会话：<会话名>（<YYYY>-W<ww> 起；每次换主脑时更新）
@@ -48,7 +44,7 @@ brain/
 6. 合入权限：<ff 合入并直接 push main | 每次合入先问用户>。
 7. 测试口径：<全仓命令>；<集成命令>；真依赖地址 <...>。
 
-## 1. 遗留小项（零碎的小事，不上卡；件数同步到 cards.json 的 leftovers；挑出来排期时转成待办卡并从这里删掉）
+## 1. 遗留小项（零碎的小事，不上卡；件数用卡片命令的 leftovers 同步；挑出来排期时转成待办卡并从这里删掉）
 - <一句话> —— 来源 <文档/会话>
 
 ## 2. 环境与待清理

@@ -186,6 +186,19 @@ class Hook(unittest.TestCase):
                 self.assertEqual(r["decision"], "block")
                 self.assertIn("kind 只能是", r["reason"])
 
+    def test_denies_direct_edits_before_they_happen(self):
+        for path in ("/r/docs/brain/cards.json", "/r/brain/events.jsonl"):
+            for tool in ("Write", "Edit", "MultiEdit"):
+                ev = json.dumps({"hook_event_name": "PreToolUse", "tool_name": tool,
+                                 "tool_input": {"file_path": path}}, ensure_ascii=False)
+                code, out = run_hook(ev)
+                r = json.loads(out)["hookSpecificOutput"]
+                self.assertEqual((code, r["permissionDecision"]), (0, "deny"))
+                self.assertIn("卡片命令", r["permissionDecisionReason"])
+        other = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                            "tool_input": {"file_path": "/r/docs/brain/ledger.md"}})
+        self.assertEqual(run_hook(other), (0, ""))
+
     def test_passes_good_file_and_others(self):
         with tempfile.TemporaryDirectory() as t:
             good = write_tmp(t, json.dumps(example(), ensure_ascii=False))

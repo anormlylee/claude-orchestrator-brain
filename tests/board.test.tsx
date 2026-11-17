@@ -1,93 +1,77 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
+const HOME = '/h'
+const NOW = Date.now()
 const REG = {
   projects: [
-    { key: 'demo', file: '/x/demo.json', activity: '/x/ledger.md' },
+    { key: 'demo', file: '/x/repo/docs/brain/cards.json', activity: '/x/repo/docs/brain/ledger.md' },
     { key: 'fresh', file: '/y/missing.json', activity: '/y/ledger.md' },
     { key: 'broken', file: '/z/broken.json', activity: '/z/ledger.md' },
   ],
 }
+const W = { since: '2026-11-11', done: 2, rejects: 3, rework: 1, dispatched: 4 }
 const PROJECT = {
   project: '演示项目', stage: '内测', stageGoal: '跑通全流程',
-  brain: { name: '演示主脑', id: 'local_abc' }, leftovers: 5,
+  brain: { name: '演示主脑', id: 'local_brain' }, leftovers: 5,
+  stats: { week: W, stage: { ...W, since: '2026-11-01' } },
   cards: [
     { id: 'a', title: '定方案', column: 'todo', kind: '决策', priority: 1, milestone: true, ball: 'you', ask: '拍板方案', askKind: 'decide', now: '三个选项', blocked: '', since: '2026-11-01', doneAt: null },
     { id: 'b', title: '入金实测', column: 'todo', kind: '事务', priority: 2, milestone: true, ball: 'you', ask: '入一笔小额资金', askKind: 'act', now: '', blocked: '对方提测', since: null, doneAt: null },
-    { id: 'c', title: '必补代码', column: 'doing', kind: '功能', priority: 1, milestone: true, ball: 'brain', ask: '', askKind: null, now: '实施中', blocked: '', since: null, doneAt: null, rejects: 2 },
-    { id: 'e', title: '首页白屏', column: 'todo', kind: '缺陷', priority: 1, milestone: false, ball: 'brain', ask: '', askKind: null, now: '待修', blocked: '', since: null, doneAt: null, causedBy: 'd' },
-    { id: 'd', title: '上测试服', column: 'done', kind: '功能', priority: null, milestone: true, ball: 'brain', ask: '', askKind: null, now: '', blocked: '', since: null, doneAt: null },
+    { id: 'c', title: '必补代码', column: 'doing', kind: '功能', priority: 1, milestone: true, ball: 'brain', ask: '', askKind: null, now: '实施中', blocked: '', since: '2026-11-10', doneAt: null, rejects: 2, sessions: ['local_run'] },
+    { id: 'f', title: '老分支', column: 'doing', kind: '功能', priority: 2, milestone: false, ball: 'brain', ask: '', askKind: null, now: '实施中', blocked: '', since: '2026-11-10', doneAt: null, sessions: ['local_stuck'] },
+    { id: 'd', title: '上测试服', column: 'done', kind: '功能', priority: null, milestone: true, ball: 'brain', ask: '', askKind: null, now: '已合入', blocked: '', since: '2026-11-16', doneAt: '2026-11-16', evidence: '.local/evidence/d/' },
+    { id: 'e', title: '首页白屏', column: 'todo', kind: '缺陷', priority: 1, milestone: false, ball: 'brain', ask: '', askKind: null, now: '待修', blocked: '', since: '2026-11-16', doneAt: null, causedBy: 'd' },
   ],
+}
+const LIVE: Record<string, object> = {
+  'local_run.json': { id: 'local_run', state: 'running', at: NOW / 1000 - 30, project: '/x/repo' },
+  'local_stuck.json': { id: 'local_stuck', state: 'idle', at: NOW / 1000 - 5 * 3600, project: '/x/repo' },
+  'local_ask.json': { id: 'local_ask', state: 'waiting', at: NOW / 1000 - 600, project: '/x/repo/.claude/worktrees/w1' },
+  'local_other.json': { id: 'local_other', state: 'waiting', at: NOW / 1000 - 60, project: '/elsewhere' },
 }
 
 const pane = (bodyColumns: number) =>
   ({
     plugin: 'orchestrator', component: 'Pane', requestId: 'board',
-    props: { title: '项目看板', isFocused: false, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows: 60 }, view: {} },
+    props: { title: '项目看板', isFocused: false, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows: 80 }, view: {} },
   }) as const
 
-test('总览按项目显示，点项目进入单项目看板再返回', async ($, on) => {
-  let store: unknown = undefined
+type Run = { argv: readonly string[]; stdin?: string; lang?: string }
+
+function world(on: Parameters<Parameters<typeof test>[1]>[1], files: Record<string, string>) {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  mock.env(on, { HOME, CLAUDE_CODE_HOST_SESSION_ID: 'local_brain' })
   on('fs.read', (_, e) => {
     const path = String((e as { path?: unknown }).path ?? '')
-    if (path.endsWith('projects.json')) return { value: JSON.stringify(REG) }
-    if (path.endsWith('demo.json')) return { value: JSON.stringify(PROJECT) }
+    if (path === `${HOME}/.claude/board/projects.json`) return { value: JSON.stringify(REG) }
+    if (path.endsWith('repo/docs/brain/cards.json')) return { value: JSON.stringify(PROJECT) }
     if (path.endsWith('broken.json')) return { value: JSON.stringify({ ...PROJECT, cards: [{ ...PROJECT.cards[0], column: '待办' }] }) }
-    return { value: '' }
+    const name = path.split('/').pop() ?? ''
+    if (path.includes('/board/live/') && LIVE[name]) return { value: JSON.stringify(LIVE[name]) }
+    if (files[path] !== undefined) return { value: files[path] }
+    throw new Error('ENOENT')
   })
-  on('fs.write', () => ({ value: undefined }))
+  on('fs.list', (_, e) => {
+    const path = String((e as { path?: unknown }).path ?? '')
+    if (path.endsWith('/board/live')) return { value: Object.keys(LIVE).map(name => ({ name, kind: 'file', size: 1, mtimeMs: NOW })) }
+    return { value: [] }
+  })
   on('fs.stat', (_, e) => {
     if (String((e as { path?: unknown }).path ?? '').endsWith('missing.json')) throw new Error('ENOENT')
-    return { value: { kind: 'file', size: 1, mtimeMs: Date.now() } }
+    return { value: { kind: 'file', size: 1, mtimeMs: NOW, isLink: false } }
   })
-  on('store.get', () => ({ value: store }))
-  on('store.set', (_, e) => {
-    store = (e as { value?: unknown }).value
+  on('fs.exists', (_, e) => ({ value: files[String((e as { path?: unknown }).path ?? '')] !== undefined }))
+  on('fs.write', (_, e) => {
+    const { path, text } = e as { path: string; text: string }
+    files[path] = text
     return { value: undefined }
   })
-
-  for (const surface of ['terminal', 'desktop'] as const) {
-    for (const width of [40, 70, 140]) {
-      const ui = await $.ui.mount({ ...pane(width), surface })
-      expect((await ui.find({ type: 'Text', text: /拍板 1/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /阶段目标 1\/4/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /打回 2 次 \/ 完成 1 件/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /返工 1 件/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Button', label: /进入项目/ }))).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /还没迁移到卡片/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /卡片文件格式不合格/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /列 待办 不认识/ }))?.text).toBeTruthy()
-
-      await ui.press({ key: 'enter:demo' })
-      expect((await ui.find({ type: 'Text', text: /^拍板方案$/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /^对方提测$/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /遗留小项 5 件/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /返工自 d/ }))?.text).toBeTruthy()
-
-      await ui.press({ key: 'back' })
-      expect((await ui.find({ type: 'Text', text: /^项目看板$/ }))?.text).toBeTruthy()
-      await ui.unmount()
-    }
-  }
-})
-
-test('卡片“带去主脑”：复制卡片内容并跳到主脑会话', async ($, on) => {
-  on('fs.read', (_, e) => {
-    const path = String((e as { path?: unknown }).path ?? '')
-    if (path.endsWith('projects.json')) return { value: JSON.stringify({ projects: [REG.projects[0]] }) }
-    if (path.endsWith('demo.json')) return { value: JSON.stringify(PROJECT) }
-    return { value: '' }
-  })
-  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: Date.now() } }))
-  let store: unknown = undefined
-  on('store.get', () => ({ value: store }))
-  on('store.set', (_, e) => {
-    store = (e as { value?: unknown }).value
-    return { value: undefined }
-  })
-  const runs: { argv: readonly string[]; stdin?: string; lang?: string }[] = []
+  const runs: Run[] = []
   on('process.run', (_, e) => {
     const { argv, init } = e as { argv: readonly string[]; init?: { stdin?: string; env?: Record<string, string> } }
     runs.push({ argv, stdin: init?.stdin, lang: init?.env?.LANG })
+    if (argv[0] === 'rm') delete files[argv[2] ?? '']
     return { value: { exitCode: 0, stdout: '', stderr: '' } }
   })
   const toasts: string[] = []
@@ -95,21 +79,79 @@ test('卡片“带去主脑”：复制卡片内容并跳到主脑会话', async
     toasts.push((e as { text: string }).text)
     return { value: undefined }
   })
+  return { runs, toasts, clock }
+}
 
+test('第一屏是“现在要我做的”队列，项目块带会话实况和信任指标', async ($, on) => {
+  world(on, {})
+  for (const surface of ['terminal', 'desktop'] as const) {
+    for (const width of [40, 140]) {
+      const ui = await $.ui.mount({ ...pane(width), surface })
+      expect((await ui.find({ type: 'Text', text: /^现在要我做的$/ }))?.text).toBeTruthy()
+      // 队列：等你批准的会话（本项目目录下的未登记会话）、拍板、动手、新交付；别的目录的会话不算
+      expect((await ui.find({ type: 'Text', text: /会话弹出了权限确认/ }))?.text).toBeTruthy()
+      // 按项目分组：组头有各类件数
+      expect((await ui.find({ type: 'Text', text: /等你批准 1/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Button', label: /进入项目/ }))).toBeTruthy()
+      expect((await ui.find({ type: 'Button', label: /去这个会话/ }))).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /^拍板方案$/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /^入一笔小额资金$/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /看验证产物确认/ }))?.text).toBeTruthy()
+      // 项目块
+      expect((await ui.find({ type: 'Text', text: /会话等你批准 1/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /● 在跑 1/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /已等 10 分钟/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /会话停滞 1/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /打回 3/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /返工 1/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /还没迁移到卡片/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /列 待办 不认识/ }))?.text).toBeTruthy()
+
+      await ui.press({ key: 'enter:demo' })
+      expect((await ui.find({ type: 'Text', text: /遗留小项 5 件/ }))?.text).toBeTruthy()
+      await ui.press({ key: 'tab:doing' }).catch(() => undefined)
+      expect((await ui.find({ type: 'Text', text: /会话在跑/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /会话停了 5 小时/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /打回 2 次/ }))?.text).toBeTruthy()
+
+      await ui.press({ key: 'back' })
+      expect((await ui.find({ type: 'Text', text: /^现在要我做的$/ }))?.text).toBeTruthy()
+      await ui.unmount()
+    }
+  }
+})
+
+test('带去主脑：留下待填内容、复制兜底、跳转；主脑会话读到后填进输入框', async ($, on) => {
+  const files: Record<string, string> = {}
+  const { runs, toasts, clock } = world(on, files)
+  let box = ''
+  on('prompt.read', () => ({ value: { text: box, cursor: box.length } }))
+  on('prompt.fill', (_, e) => {
+    const { text, mode } = e as { text: string; mode?: string }
+    box = mode === 'append' ? box + text : text
+    return { isFilled: true }
+  })
+
+  on('session.start', (_, e) => ({ cwd: (e as { cwd: string }).cwd }))
+  on('command.register', () => ({ value: {} }))
+  await $.session.start({ cwd: '/x/repo', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...pane(140), surface: 'desktop' })
-  await ui.press({ key: 'enter:demo' })
-  expect(await ui.find({ type: 'Button', label: /带去主脑/ })).toBeTruthy()
-  await ui.press({ key: 'handoff:a' })
-  for (let i = 0; i < 50 && toasts.length === 0; i++) await new Promise(r => setTimeout(r, 10))
+  await ui.press({ key: 'handoff:c:demo:a' })
 
-  const copy = runs.find(r => r.argv[0] === 'pbcopy')
-  expect(copy?.stdin).toContain('关于看板卡片「定方案」（演示项目，卡片编号 a）')
-  expect(copy?.stdin).toContain('- 状态：待办，决策，P1，阶段目标')
-  expect(copy?.stdin).toContain('- 现状：三个选项')
-  expect(copy?.stdin).toContain('- 等我拍板：拍板方案')
-  expect(copy?.stdin).toContain('我的指示：')
-  expect(copy?.lang).toContain('UTF-8')
-  expect(runs.find(r => r.argv[0] === 'open')?.argv[1]).toBe('claude://claude.ai/epitaxy/local_abc')
-  expect(toasts[0]).toContain('⌘V')
+  const pending = files[`${HOME}/.claude/board/pending/local_brain.json`]
+  expect(pending).toBeTruthy()
+  const text = (JSON.parse(pending ?? '{}') as { text: string }).text
+  expect(text).toContain('关于看板卡片「定方案」（演示项目，卡片编号 a）')
+  expect(text).toContain('- 等我拍板：拍板方案')
+  expect(text).toContain('我的指示：')
+  expect(runs.find(r => r.argv[0] === 'pbcopy')?.lang).toContain('UTF-8')
+  expect(runs.find(r => r.argv[0] === 'open')?.argv[1]).toBe('claude://claude.ai/epitaxy/local_brain')
+  expect(toasts.at(-1)).toContain('自动填进输入框')
+
+  // 本测试的会话就是 local_brain：时钟走 2 秒，内容填进输入框，待填文件删掉
+  await clock.advance(2000)
+  expect(box).toBe(text)
+  expect(files[`${HOME}/.claude/board/pending/local_brain.json`]).toBeUndefined()
+  expect(toasts.at(-1)).toContain('填进输入框')
   await ui.unmount()
 })

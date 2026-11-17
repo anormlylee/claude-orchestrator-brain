@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 本机安装（在仓库里改文件，新开的会话立即用上新版本）：
 #   1. 把仓库根目录作为插件加进 ~/.claude/settings.json 的 env.CLAUDE_CODE_PLUGIN_DIRS：
-#      技能 /brain、/brain-handback，项目看板 /board，钩子（杀进程守卫、红线守卫、回报格式检查、卡片格式检查）
+#      技能 /brain、/brain-handback，项目看板 /board，钩子（杀进程守卫、红线守卫、回报格式检查、卡片文件守护、会话实况）
+#   1b. 软链接卡片命令到 ~/.claude/bin/card（主脑用它记卡片：python3 ~/.claude/bin/card --help）
 #   2. 软链接 output style 到 ~/.claude/output-styles/（插件里的 output style 会带插件前缀，所以单独装，名字保持 brain）
 #   3. 建本机私有数据文件（已有就不动）：看板登记表 ~/.claude/board/projects.json、生产环境清单 ~/.claude/redlines.json
 #   4. 清掉旧版分散安装留下的软链接和设置条目
@@ -84,6 +85,7 @@ case "${1:-}" in
   --uninstall)
     edit_settings uninstall
     unlink_old
+    [ -L "$CLAUDE_DIR/bin/card" ] && rm "$CLAUDE_DIR/bin/card" && echo "已删 $CLAUDE_DIR/bin/card"
     for f in "$REPO"/output-styles/*.md; do
       d="$CLAUDE_DIR/output-styles/$(basename "$f")"
       [ -L "$d" ] && rm "$d" && echo "已删 $d"
@@ -104,6 +106,7 @@ fi
 styles
 unlink_old
 edit_settings install
+link "$REPO/board/card.py" "$CLAUDE_DIR/bin/card"
 
 mkdir -p "$CLAUDE_DIR/board"
 [ -f "$CLAUDE_DIR/board/projects.json" ] || { echo '{ "projects": [] }' > "$CLAUDE_DIR/board/projects.json"; echo "已建看板登记表 $CLAUDE_DIR/board/projects.json"; }
@@ -117,6 +120,7 @@ cat <<MSG
 
 完成。新开的会话生效，已经开着的会话要重启：
   /brain          把当前会话设为主脑
-  /board          打开项目看板
+  /board          打开项目看板（第一屏是“现在要我做的”）
+  python3 $CLAUDE_DIR/bin/card --help   主脑记卡片的命令
   钩子拦截和出错记在 $CLAUDE_DIR/logs/hooks.log
 MSG
