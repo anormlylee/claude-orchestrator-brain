@@ -162,6 +162,9 @@ const stats = (p: Project) => {
     msTotal: ms.length,
     msDone: ms.filter(c => c.column === 'done').length,
     msVerify: ms.filter(c => c.column === 'verify').length,
+    // 信任指标：本阶段的验收打回次数、合入后才发现的返工件数（设计见 docs/design/2026-11-trust.md）
+    rejects: p.cards.reduce((n, c) => n + (typeof c.rejects === 'number' ? c.rejects : 0), 0),
+    rework: p.cards.filter(c => typeof c.causedBy === 'string' && c.causedBy !== '').length,
   }
 }
 
@@ -334,6 +337,15 @@ export const register: Register = on => {
       return chips(list)
     }
 
+    // 信任指标行：打回次数对已完成件数、返工件数
+    const trust = (s: ReturnType<typeof stats>) => (
+      <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
+        <Text size="caption" dimColor>本阶段</Text>
+        {soft(`打回 ${s.rejects} 次 / 完成 ${s.done} 件`, s.rejects > 0 ? C.amber : C.green)}
+        {soft(`返工 ${s.rework} 件`, s.rework > 0 ? C.red : C.green)}
+      </Box>
+    )
+
     // ---------- 单项目看板 ----------
     const proj = projects.find(p => p.key === current)
     if (proj !== undefined && proj.data !== undefined) {
@@ -351,6 +363,8 @@ export const register: Register = on => {
         if (c.priority !== null) parts.push(soft(`P${c.priority}`, PRIORITY_COLOR[c.priority] ?? C.grey))
         parts.push(soft(c.kind, KIND_COLOR[c.kind] ?? C.grey))
         if (c.milestone) parts.push(soft('◆ 阶段目标', C.teal))
+        if (typeof c.rejects === 'number' && c.rejects > 0) parts.push(soft(`打回 ${c.rejects} 次`, C.amber))
+        if (typeof c.causedBy === 'string' && c.causedBy !== '') parts.push(soft(`返工自 ${c.causedBy}`, C.red))
         return chips(parts)
       }
 
@@ -431,6 +445,7 @@ export const register: Register = on => {
               statBlock(s.done, '已完成', C.green),
             ])}
             {waiting(s)}
+            {trust(s)}
             <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
               {act.isStale ? pill(act.text, C.red) : <Text size="caption" dimColor>{act.text}</Text>}
               <Text size="caption" dimColor>· {visitText(prev)} · 冻结 {s.frozen} · 遗留 {p.leftovers}</Text>
@@ -520,6 +535,7 @@ export const register: Register = on => {
             statBlock(s.todo, '待办', C.purple),
           ])}
           {waiting(s)}
+          {trust(s)}
           <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
             {act.isStale ? pill(act.text, C.red) : <Text size="caption" dimColor>{act.text}</Text>}
             <Text size="caption" dimColor>· {visitText(visits[l.key] ?? 0)}</Text>

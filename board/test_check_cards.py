@@ -66,6 +66,14 @@ class Format(unittest.TestCase):
         del d["cards"][0]["detail"]
         self.assertEqual(problems(d), [])  # detail 可以不写
 
+    def test_trust_fields(self):
+        self.assertEqual(problems(with_card(rejects=0)), [])
+        self.assertIn("rejects", joined(with_card(rejects=-1)))
+        self.assertIn("rejects", joined(with_card(rejects="2")))
+        self.assertIn("只有缺陷卡能写 causedBy", joined(with_card(causedBy="F-1")))
+        self.assertIn("causedBy 要写", joined(with_card(kind="缺陷", causedBy="")))
+        self.assertEqual(problems(with_card(kind="缺陷", causedBy="F-1")), [])
+
     def test_enums(self):
         self.assertIn("column 只能是", joined(with_card(column="待办")))
         self.assertIn("kind 只能是", joined(with_card(kind="需求")))

@@ -21,7 +21,7 @@ python3 board/check-cards.py <项目文档目录>/brain/cards.json
 
 ## 卡片
 
-每个字段都要写，没有内容时空文字写 `""`，空值写 `null`。只有 `detail` 可以不写。
+每个字段都要写，没有内容时空文字写 `""`，空值写 `null`。只有 `detail`、`rejects`、`causedBy` 可以不写。
 
 | 字段 | 含义 | 写法 |
 |---|---|---|
@@ -39,8 +39,12 @@ python3 board/check-cards.py <项目文档目录>/brain/cards.json
 | `since` | 进入本列的日期 | `YYYY-MM-DD`，每次换列时更新，不能晚于今天 |
 | `doneAt` | 完成日期 | 进已完成列时写 `YYYY-MM-DD`；其他列写 `null` |
 | `detail` | 详情（看板不显示） | 可选。拍板类的完整决策栏；主脑自用的分支、提交、验收要点 |
+| `rejects` | 验收打回次数 | 可选，不小于 0 的整数；主脑每打回一次加一，没打回过可以不写 |
+| `causedBy` | 返工来源 | 可选，只用于缺陷卡：合入后才发现的问题，写引入它的那张卡的编号；不是返工就不写 |
 
 已完成的卡保留到阶段目标关闭，用来算进度；阶段关闭后由主脑删掉，历史看周流水。
+
+看板用 `rejects` 和 `causedBy` 算本阶段的两个信任指标：验收打回次数对已完成件数，以及合入后才发现的返工件数。删卡之前，主脑把这两个数记进周流水。设计见 `docs/design/2026-11-trust.md`。
 
 ## 示例
 
@@ -64,8 +68,8 @@ python3 board/check-cards.py <项目文档目录>/brain/cards.json
       "id": "F-3", "title": "下单流程", "column": "doing", "kind": "功能",
       "priority": 1, "milestone": true, "ball": "brain",
       "ask": "", "askKind": null,
-      "now": "分支会话实施中，预计今天提交", "blocked": "",
-      "since": "2026-11-11", "doneAt": null
+      "now": "打回一次后重做，预计今天提交", "blocked": "",
+      "since": "2026-11-11", "doneAt": null, "rejects": 1
     },
     {
       "id": "F-1", "title": "测试环境部署", "column": "done", "kind": "事务",
@@ -73,6 +77,13 @@ python3 board/check-cards.py <项目文档目录>/brain/cards.json
       "ask": "", "askKind": null,
       "now": "已部署并验收", "blocked": "",
       "since": "2026-11-08", "doneAt": "2026-11-09"
+    },
+    {
+      "id": "B-2", "title": "部署后首页白屏", "column": "doing", "kind": "缺陷",
+      "priority": 1, "milestone": false, "ball": "brain",
+      "ask": "", "askKind": null,
+      "now": "已定位到缓存配置，修复中", "blocked": "",
+      "since": "2026-11-11", "doneAt": null, "causedBy": "F-1"
     }
   ]
 }

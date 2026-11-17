@@ -44,6 +44,23 @@ def items(body):
     return [body[a:b].strip() for a, b in zip(starts, starts[1:] + [len(body)])]
 
 
+def check_artifacts(body):
+    """第 8 栏：要么给出产物路径和复现命令，要么写清为什么不适用。"""
+    m = re.search(r"不适用\s*[:：]\s*(.*)", body, re.S)
+    if m:
+        if len(m.group(1).strip()) < 4:
+            return ["第 8 栏写了不适用但没写理由：只限本项目还没有验证技能，或改动没有用户能看到的行为（写清为什么）。"]
+        return []
+    miss = []
+    if "/" not in body:
+        miss.append("产物路径")
+    if "复现" not in body:
+        miss.append("复现命令")
+    if miss:
+        return [f"第 8 栏「验证产物」缺：{'、'.join(miss)}。写成「路径：<产物目录>；复现：<命令>；覆盖：<走了哪些流程>」。"]
+    return []
+
+
 def check(msg):
     problems = []
     first = msg.strip().splitlines()[0]
@@ -55,14 +72,16 @@ def check(msg):
     for no, key in ((1, "需要决定"), (2, "出入"), (3, "遗留")):
         if no not in secs or key not in secs[no][0]:
             problems.append(f"缺第 {no} 栏「{key}」：没有内容也要写这一栏，内容写「无」。")
-    merged = 4 in secs and secs[4][0].startswith("4-7")
+    merged = 4 in secs and re.match(r"4-[78]\b", secs[4][0]) is not None
     if merged:
         if "不适用" not in secs[4][1]:
-            problems.append("合并写的「【4–7】」要写成「不适用：<理由>」。")
+            problems.append("合并写的「【4–8】」要写成「不适用：<理由>」。")
     else:
-        for no, key in ((4, "tip"), (5, "测试"), (6, "变异"), (7, "偏离")):
+        for no, key in ((4, "tip"), (5, "测试"), (6, "变异"), (7, "偏离"), (8, "验证")):
             if no not in secs or key not in secs[no][0]:
-                problems.append(f"缺第 {no} 栏「{key}」；不产出代码的任务可以合成一行「【4–7】不适用：<理由>」。")
+                problems.append(f"缺第 {no} 栏「{key}」；不产出代码的任务可以合成一行「【4–8】不适用：<理由>」。")
+        if 8 in secs and "验证" in secs[8][0]:
+            problems.extend(check_artifacts(secs[8][1]))
 
     if 1 in secs:
         for n, it in enumerate(items(secs[1][1]), 1):

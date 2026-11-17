@@ -17,7 +17,7 @@ ASK_KINDS = ("decide", "act")
 TOP_KEYS = ("project", "stage", "stageGoal", "brain", "leftovers", "cards")
 CARD_KEYS = ("id", "title", "column", "kind", "priority", "milestone", "ball",
              "ask", "askKind", "now", "blocked", "since", "doneAt")
-CARD_OPTIONAL = ("detail",)
+CARD_OPTIONAL = ("detail", "rejects", "causedBy")
 TITLE_MAX = 20
 ASK_MAX = 40
 NOW_MAX = 40
@@ -121,6 +121,14 @@ def check_card(c, where, today, has_goal):
 
     if "detail" in c and not is_str(c.get("detail")):
         problems.append(f"{where}：detail 要是文字。")
+    if "rejects" in c and (not is_int(c.get("rejects")) or c.get("rejects") < 0):
+        problems.append(f"{where}：rejects（验收打回次数）要是不小于 0 的整数；没打回过可以不写。")
+    if "causedBy" in c:
+        cb = c.get("causedBy")
+        if not is_str(cb) or not cb.strip():
+            problems.append(f"{where}：causedBy 要写引入这个问题的那张卡的编号；不是返工就不写这个字段。")
+        elif c.get("kind") != "缺陷":
+            problems.append(f"{where}：只有缺陷卡能写 causedBy（合入后才发现的问题，指向引入它的卡）。")
     return problems
 
 

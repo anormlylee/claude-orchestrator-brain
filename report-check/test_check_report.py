@@ -15,6 +15,7 @@ GOOD = """F-12 最终回报：完成，可以合入，召见改签式已落地
 【5. 测试】go test ./... 全部通过（42 包）
 【6. 变异】M1：去掉签名校验 → TestSign 变红
 【7. 偏离规则】无
+【8. 验证产物】路径：.local/evidence/F-12/；复现：make verify FLOW=召见；覆盖：召见、改签两条流程
 """
 
 RESEARCH = """R-3 最终回报：完成，无需合入，官方接口支持批量查单
@@ -22,7 +23,7 @@ RESEARCH = """R-3 最终回报：完成，无需合入，官方接口支持批�
 【1. 需要决定】无
 【2. 与派活设想的出入】无
 【3. 遗留】无
-【4–7】不适用：调研任务，没有改代码
+【4–8】不适用：调研任务，没有改代码
 """
 
 
@@ -37,6 +38,14 @@ class T(unittest.TestCase):
     def test_good_passes(self):
         self.assertIsNone(run(GOOD))
         self.assertIsNone(run(RESEARCH))
+        self.assertIsNone(run(RESEARCH.replace("【4–8】", "【4–7】")))  # 旧写法仍然认
+
+    def test_artifacts(self):
+        base = GOOD.split("【8.")[0]
+        self.assertIn("缺第 8 栏", run(base) or "")
+        self.assertIn("缺：产物路径、复现命令", run(base + "【8. 验证产物】跑过了，没问题\n") or "")
+        self.assertIn("没写理由", run(base + "【8. 验证产物】不适用：\n") or "")
+        self.assertIsNone(run(base + "【8. 验证产物】不适用：本项目还没有验证技能\n"))
 
     def test_non_report_passes(self):
         self.assertIsNone(run("已收到"))

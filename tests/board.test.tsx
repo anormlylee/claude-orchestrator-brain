@@ -13,7 +13,8 @@ const PROJECT = {
   cards: [
     { id: 'a', title: '定方案', column: 'todo', kind: '决策', priority: 1, milestone: true, ball: 'you', ask: '拍板方案', askKind: 'decide', now: '三个选项', blocked: '', since: '2026-11-01', doneAt: null },
     { id: 'b', title: '入金实测', column: 'todo', kind: '事务', priority: 2, milestone: true, ball: 'you', ask: '入一笔小额资金', askKind: 'act', now: '', blocked: '对方提测', since: null, doneAt: null },
-    { id: 'c', title: '必补代码', column: 'doing', kind: '功能', priority: 1, milestone: true, ball: 'brain', ask: '', askKind: null, now: '实施中', blocked: '', since: null, doneAt: null },
+    { id: 'c', title: '必补代码', column: 'doing', kind: '功能', priority: 1, milestone: true, ball: 'brain', ask: '', askKind: null, now: '实施中', blocked: '', since: null, doneAt: null, rejects: 2 },
+    { id: 'e', title: '首页白屏', column: 'todo', kind: '缺陷', priority: 1, milestone: false, ball: 'brain', ask: '', askKind: null, now: '待修', blocked: '', since: null, doneAt: null, causedBy: 'd' },
     { id: 'd', title: '上测试服', column: 'done', kind: '功能', priority: null, milestone: true, ball: 'brain', ask: '', askKind: null, now: '', blocked: '', since: null, doneAt: null },
   ],
 }
@@ -49,6 +50,8 @@ test('总览按项目显示，点项目进入单项目看板再返回', async ($
       const ui = await $.ui.mount({ ...pane(width), surface })
       expect((await ui.find({ type: 'Text', text: /拍板 1/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /阶段目标 1\/4/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /打回 2 次 \/ 完成 1 件/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /返工 1 件/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Button', label: /进入项目/ }))).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /还没迁移到卡片/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /卡片文件格式不合格/ }))?.text).toBeTruthy()
@@ -58,6 +61,7 @@ test('总览按项目显示，点项目进入单项目看板再返回', async ($
       expect((await ui.find({ type: 'Text', text: /^拍板方案$/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /^对方提测$/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /遗留小项 5 件/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /返工自 d/ }))?.text).toBeTruthy()
 
       await ui.press({ key: 'back' })
       expect((await ui.find({ type: 'Text', text: /^项目看板$/ }))?.text).toBeTruthy()
