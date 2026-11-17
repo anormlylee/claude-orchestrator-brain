@@ -140,7 +140,7 @@ commit message 用 `docs(brain): <动作>`，完整历史交给 git，不在台�
 
 **被拒时等用户一句话**：主脑这一轮如果是被分支回报或其他自动事件唤醒的（不是用户发的消息），应用会拒绝 `user_asked` 直接启动。用户全局禁止了选项卡式交互，不要改成 `own_initiative` 提议卡片（会被钩子拦下）。把这张卡留在待办，`ball` 写 `you`、`askKind` 写 `act`、`ask` 写“回一句‘派 <编号>’”，在回复里用文字说明；用户回复后，那一轮就能用 `user_asked` 直接派。不要为了绕开拒绝去 `SendMessage` 让别的会话代为派活。
 
-返回的会话编号（`local_…`）用 `python3 ~/.claude/bin/card dispatch <编号> --session <会话编号>` 记下，卡自动移到进行中。已经在跑的会话用 `SendMessage` 发给它的会话编号，同一主题的后续工作交给原会话，不另开新会话。
+返回的会话编号（`local_…`）用 `python3 ~/.claude/bin/card dispatch <编号> --session <会话编号>` 记下，卡自动移到进行中。**接着把新会话的权限模式设成和主脑一样**（`set_session_permission_mode`，会话编号填刚返回的那个，模式填本会话的模式，`get_session("self")` 能查到）：新会话默认跟随全局设置，和主脑不一致时，分支会逐条请用户确认命令，它发给主脑的回报也会因为模式不同被拦下等用户批准。已经在跑的会话用 `SendMessage` 发给它的会话编号，同一主题的后续工作交给原会话，不另开新会话。
 
 重派时，先用 `SendMessage` 通知被取代的旧会话停止，再按「会话卫生」归档。
 
