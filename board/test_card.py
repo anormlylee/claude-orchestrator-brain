@@ -53,6 +53,9 @@ class Card(unittest.TestCase):
         c = self.cards()["cards"][0]
         self.assertEqual((c["column"], c["rejects"], c["now"], c["since"]), ("doing", 1, "变异探针存活", "2026-11-18"))
         self.run_card("verify", "F-3")
+        # 产物必须是存在的路径；提交号之类的文字不收
+        self.run_card("done", "F-3", "--evidence", "合入 abc123", ok=False)
+        os.makedirs(os.path.join(self.tmp, "repo", ".local", "evidence", "F-3"))
         self.run_card("done", "F-3", "--evidence", ".local/evidence/F-3/")
         c = self.cards()["cards"][0]
         self.assertEqual((c["column"], c["doneAt"], c["evidence"]), ("done", "2026-11-18", ".local/evidence/F-3/"))
@@ -65,6 +68,21 @@ class Card(unittest.TestCase):
         log = self.run_card("log").stdout
         self.assertIn("F-3 打回：变异探针存活", log)
         self.assertIn("F-3 完成：产物 .local/evidence/F-3/", log)
+
+    def test_review(self):
+        self.init()
+        self.run_card("new", "F-1", "--title", "登录页", "--kind", "功能", "--priority", "1", "--now", "待派")
+        self.run_card("review", "F-1", ok=False)  # 没完成不能请用户看
+        self.run_card("done", "F-1", "--review", ok=False)  # 请用户看必须带产物
+        os.makedirs(os.path.join(self.tmp, "repo", "art"))
+        self.run_card("done", "F-1", "--evidence", "art", "--review")
+        self.assertTrue(self.cards()["cards"][0]["review"])
+        self.run_card("move", "F-1", "doing")  # 重开后不再请用户看
+        self.assertNotIn("review", self.cards()["cards"][0])
+        self.run_card("done", "F-1", "--evidence", "art")
+        self.assertNotIn("review", self.cards()["cards"][0])
+        self.run_card("review", "F-1")  # 事后补标
+        self.assertTrue(self.cards()["cards"][0]["review"])
 
     def test_ask_answer_and_rules(self):
         self.init()

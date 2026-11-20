@@ -18,7 +18,7 @@ TOP_KEYS = ("project", "stage", "stageGoal", "brain", "leftovers", "cards")
 TOP_OPTIONAL = ("generatedBy", "stats")
 CARD_KEYS = ("id", "title", "column", "kind", "priority", "milestone", "ball",
              "ask", "askKind", "now", "blocked", "since", "doneAt")
-CARD_OPTIONAL = ("detail", "rejects", "causedBy", "sessions", "evidence")
+CARD_OPTIONAL = ("detail", "rejects", "causedBy", "sessions", "evidence", "review")
 TITLE_MAX = 20
 ASK_MAX = 40
 NOW_MAX = 40
@@ -135,6 +135,11 @@ def check_card(c, where, today, has_goal):
         problems.append(f"{where}：sessions 要是会话编号的列表。")
     if "evidence" in c and not is_str(c.get("evidence")):
         problems.append(f"{where}：evidence 要是验证产物的路径。")
+    if "review" in c:
+        if c.get("review") is not True:
+            problems.append(f"{where}：review（请用户看）只能是 true；不请用户看就不写。")
+        elif c.get("column") != "done" or not is_str(c.get("evidence")):
+            problems.append(f"{where}：只有已完成、带验证产物的卡能标 review（请用户看）。")
     return problems
 
 

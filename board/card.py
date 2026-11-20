@@ -13,7 +13,9 @@
   card.py link F-3 --session local_...  记下另一个相关会话，不换列
   card.py verify F-3 [--now 分支回报完成，待验收]
   card.py reject F-3 --reason 变异探针存活
-  card.py done F-3 [--evidence <产物目录>] [--now 已合入]
+  card.py done F-3 [--evidence <产物路径>] [--review] [--now 已合入]
+                                       --review：请用户看（看板首屏“待你看”）；只给有录屏截图、用户能看到变化的事
+  card.py review F-3                    给已完成的卡补上“请用户看”
   card.py ask D-1 --decide|--act --ask 在三个渠道里选一个 [--now ...]
   card.py answer D-1 [--now ...]
   card.py external L-1 --now 等律所书面意见
@@ -133,6 +135,8 @@ def apply(state, ev):
         c["doneAt"] = day(at) if col == "done" else None
         if col == "done":
             c["ball"], c["ask"], c["askKind"] = "brain", "", None
+        else:
+            c.pop("review", None)
 
     def set_now(c):
         if ev.get("now"):
@@ -207,7 +211,14 @@ def apply(state, ev):
         to_column(c, "done")
         if ev.get("evidence"):
             c["evidence"] = ev["evidence"]
+        if ev.get("review"):
+            c["review"] = True
         set_now(c)
+    elif op == "review":
+        c = card()
+        if c["column"] != "done":
+            raise CardError(f"{cid} 还没完成；完成时用 done --review。")
+        c["review"] = True
     elif op == "ask":
         c = card()
         c["ball"], c["ask"], c["askKind"] = "you", ev["ask"], ev["askKind"]
@@ -339,6 +350,22 @@ def parse_priority(v):
     return int(v)
 
 
+def repo_root(folder):
+    """台账目录所在的仓库根目录：docs/brain → 上两级，brain → 上一级。"""
+    parts = os.path.normpath(folder).split(os.sep)
+    if parts[-2:] == ["docs", "brain"]:
+        return os.sep.join(parts[:-2])
+    return os.path.dirname(os.path.normpath(folder))
+
+
+def check_evidence(folder, path):
+    """验证产物必须是确实存在的文件或目录（绝对路径，或相对仓库根目录）；提交号、说明文字写进现状。"""
+    full = path if os.path.isabs(path) else os.path.join(repo_root(folder), path)
+    if not os.path.exists(full):
+        raise CardError(f"验证产物 {path} 不存在（相对路径按仓库根目录 {repo_root(folder)} 算）。"
+                        "这一栏只写录屏、截图、报告等产物的路径；提交号和说明写进 --now。")
+
+
 def cmd_import(folder):
     if read_events(folder):
         raise CardError("events.jsonl 已经有记录，不能再导入。")
@@ -395,6 +422,8 @@ def main(argv=None):
             s.add_argument("--now")
     s = sub.add_parser("reject"); s.add_argument("id"); s.add_argument("--reason", required=True)
     s = sub.add_parser("done"); s.add_argument("id"); s.add_argument("--evidence"); s.add_argument("--now")
+    s.add_argument("--review", action="store_true")
+    s = sub.add_parser("review"); s.add_argument("id")
     s = sub.add_parser("ask"); s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--decide", action="store_true"); g.add_argument("--act", action="store_true")
     s.add_argument("--ask", required=True); s.add_argument("--now")
@@ -443,7 +472,11 @@ def main(argv=None):
         elif c == "reject":
             data = commit(folder, [ev(c, a.id, reason=a.reason)])
         elif c == "done":
-            data = commit(folder, [ev(c, a.id, evidence=a.evidence, now=a.now)])
+            if a.evidence is not None:
+                check_evidence(folder, a.evidence)
+            data = commit(folder, [ev(c, a.id, evidence=a.evidence, review=True if a.review else None, now=a.now)])
+        elif c == "review":
+            data = commit(folder, [ev(c, a.id)])
         elif c == "ask":
             data = commit(folder, [ev(c, a.id, ask=a.ask, askKind="decide" if a.decide else "act", now=a.now)])
         elif c == "external":
@@ -494,7 +527,7 @@ def main(argv=None):
 
 
 OP_LABEL = {"new": "建卡", "import": "导入", "dispatch": "派活", "link": "关联会话", "verify": "回报待验收",
-            "reject": "打回", "done": "完成", "ask": "请用户", "answer": "用户已答复", "external": "等外部",
+            "reject": "打回", "done": "完成", "review": "请用户看", "ask": "请用户", "answer": "用户已答复", "external": "等外部",
             "block": "阻塞", "unblock": "解除阻塞", "move": "换列", "edit": "修改", "drop": "拿掉",
             "stage": "阶段目标", "brain": "换主脑", "leftovers": "遗留小项", "project": "建项目"}
 

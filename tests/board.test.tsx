@@ -19,7 +19,10 @@ const PROJECT = {
     { id: 'b', title: '入金实测', column: 'todo', kind: '事务', priority: 2, milestone: true, ball: 'you', ask: '入一笔小额资金', askKind: 'act', now: '', blocked: '对方提测', since: null, doneAt: null },
     { id: 'c', title: '必补代码', column: 'doing', kind: '功能', priority: 1, milestone: true, ball: 'brain', ask: '', askKind: null, now: '实施中', blocked: '', since: '2026-11-10', doneAt: null, rejects: 2, sessions: ['local_run'] },
     { id: 'f', title: '老分支', column: 'doing', kind: '功能', priority: 2, milestone: false, ball: 'brain', ask: '', askKind: null, now: '实施中', blocked: '', since: '2026-11-10', doneAt: null, sessions: ['local_stuck'] },
-    { id: 'd', title: '上测试服', column: 'done', kind: '功能', priority: null, milestone: true, ball: 'brain', ask: '', askKind: null, now: '已合入', blocked: '', since: '2026-11-16', doneAt: '2026-11-16', evidence: '.local/evidence/d/' },
+    { id: 'd', title: '上测试服', column: 'done', kind: '功能', priority: null, milestone: true, ball: 'brain', ask: '', askKind: null, now: '已合入', blocked: '', since: '2026-11-16', doneAt: '2026-11-16', evidence: '.local/evidence/d/', review: true },
+    // 只填了产物、没请用户看的，不进首屏
+    { id: 'g', title: '中文化修补', column: 'done', kind: '缺陷', priority: null, milestone: false, ball: 'brain', ask: '', askKind: null, now: '已合入', blocked: '', since: '2026-11-16', doneAt: '2026-11-16', evidence: 'docs/log.md' },
+    ...[1, 2, 3, 4, 5].map(i => ({ id: `old${i}`, title: `旧事${i}`, column: 'done', kind: '事务', priority: null, milestone: false, ball: 'brain', ask: '', askKind: null, now: '已合入', blocked: '', since: '2026-11-0' + i, doneAt: '2026-11-0' + i })),
     { id: 'e', title: '首页白屏', column: 'todo', kind: '缺陷', priority: 1, milestone: false, ball: 'brain', ask: '', askKind: null, now: '待修', blocked: '', since: '2026-11-16', doneAt: null, causedBy: 'd' },
   ],
 }
@@ -82,43 +85,66 @@ function world(on: Parameters<Parameters<typeof test>[1]>[1], files: Record<stri
   return { runs, toasts, clock }
 }
 
-test('第一屏是“现在要我做的”队列，项目块带会话实况和信任指标', async ($, on) => {
+test('第一屏是项目清单：有要你批准或拍板的项目自动展开前几件，项目页带会话实况和信任指标', async ($, on) => {
   world(on, {})
   for (const surface of ['terminal', 'desktop'] as const) {
     for (const width of [40, 140]) {
       const ui = await $.ui.mount({ ...pane(width), surface })
-      expect((await ui.find({ type: 'Text', text: /^现在要我做的$/ }))?.text).toBeTruthy()
-      // 队列：等你批准的会话（本项目目录下的未登记会话）、拍板、动手、新交付；别的目录的会话不算
-      expect((await ui.find({ type: 'Text', text: /会话弹出了权限确认/ }))?.text).toBeTruthy()
-      // 按项目分组：组头有各类件数
+      expect((await ui.find({ type: 'Text', text: /^项目$/ }))?.text).toBeTruthy()
+      // 演示项目有等你批准和拍板：自动展开，先列 3 件（批准、拍板、动手），待你看折在“还有 1 件”里
       expect((await ui.find({ type: 'Text', text: /等你批准 1/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Button', label: /进入项目/ }))).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /待你看 1/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /会话弹出了权限确认/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Button', label: /去这个会话/ }))).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /^拍板方案$/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /^入一笔小额资金$/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /看验证产物确认/ }))?.text).toBeTruthy()
-      // 项目块
-      expect((await ui.find({ type: 'Text', text: /会话等你批准 1/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /● 在跑 1/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /已等 10 分钟/ }))?.text).toBeTruthy()
+      expect(await ui.find({ type: 'Text', text: /主脑请你看验证产物/ })).toBeFalsy()
+      expect(await ui.find({ type: 'Text', text: /^中文化修补$/ })).toBeFalsy()
+      // 项目行上的会话状态
+      expect((await ui.find({ type: 'Text', text: /● 在跑 1/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /会话停滞 1/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /打回 3/ }))?.text).toBeTruthy()
-      expect((await ui.find({ type: 'Text', text: /返工 1/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /还没迁移到卡片/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /列 待办 不认识/ }))?.text).toBeTruthy()
 
       await ui.press({ key: 'enter:demo' })
       expect((await ui.find({ type: 'Text', text: /遗留小项 5 件/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /会话等你批准 1/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /打回 3/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /返工 1/ }))?.text).toBeTruthy()
       await ui.press({ key: 'tab:doing' }).catch(() => undefined)
       expect((await ui.find({ type: 'Text', text: /会话在跑/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /会话停了 5 小时/ }))?.text).toBeTruthy()
       expect((await ui.find({ type: 'Text', text: /打回 2 次/ }))?.text).toBeTruthy()
 
       await ui.press({ key: 'back' })
-      expect((await ui.find({ type: 'Text', text: /^现在要我做的$/ }))?.text).toBeTruthy()
+      expect((await ui.find({ type: 'Text', text: /^项目$/ }))?.text).toBeTruthy()
       await ui.unmount()
     }
   }
+})
+
+test('展开收起、看过了、已完成列折叠', async ($, on) => {
+  world(on, {})
+  const ui = await $.ui.mount({ ...pane(140), surface: 'desktop' })
+  await ui.press({ key: 'more:demo' })
+  expect((await ui.find({ type: 'Text', text: /主脑请你看验证产物/ }))?.text).toBeTruthy()
+  // 看过了：记在本机，首屏不再出现
+  await ui.press({ key: 'seen:r:demo:d' })
+  expect(await ui.find({ type: 'Text', text: /待你看/ })).toBeFalsy()
+  // 收起后只剩项目行
+  await ui.press({ key: 'fold:demo' })
+  expect(await ui.find({ type: 'Text', text: /^拍板方案$/ })).toBeFalsy()
+  expect((await ui.find({ type: 'Text', text: /等你拍板 1/ }))?.text).toBeTruthy()
+  await ui.press({ key: 'fold:demo' })
+  expect((await ui.find({ type: 'Text', text: /^拍板方案$/ }))?.text).toBeTruthy()
+  // 项目页已完成列：7 件只先显示最近 5 件
+  await ui.press({ key: 'enter:demo' })
+  expect((await ui.find({ type: 'Button', label: /更早的 2 件/ }))).toBeTruthy()
+  expect(await ui.find({ type: 'Text', text: /^旧事1$/ })).toBeFalsy()
+  await ui.press({ key: 'done-more' })
+  expect((await ui.find({ type: 'Text', text: /^旧事1$/ }))?.text).toBeTruthy()
+  await ui.unmount()
 })
 
 test('带去主脑：留下待填内容、复制兜底、跳转；主脑会话读到后填进输入框', async ($, on) => {

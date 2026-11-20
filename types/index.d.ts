@@ -25,8 +25,10 @@ export type Card = {
   causedBy?: string
   // 这张卡对应的会话（桌面版会话编号）
   sessions?: string[]
-  // 验证产物目录（相对项目根目录或绝对路径）
+  // 验证产物路径（相对项目根目录或绝对路径）
   evidence?: string
+  // 主脑请用户看：看板首屏“待你看”只收这类
+  review?: boolean
 }
 
 export type Window = { since: string; done: number; rejects: number; rework: number; dispatched: number }
@@ -55,6 +57,10 @@ declare module 'claude-code' {
       open: string
       col: string
       showFrozen: boolean
+      // 第一屏各项目的展开状态：没记录时按“有没有要你批准或拍板的事”自动决定
+      fold: Record<string, 'open' | 'closed' | 'all'>
+      // 项目页已完成列是否显示全部
+      showAllDone: boolean
       prevVisit: number
       rev: number
     }

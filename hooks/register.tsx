@@ -3,9 +3,11 @@ import type { Register, EngineInterface } from 'claude-code'
 
 import type { Card, Column, LiveSession, Project, Registry, RegistryEntry, Window } from '../types'
 
-// 项目看板。第一屏是“现在要我做的”：只放落在用户身上的事，按项目分组、项目按登记顺序固定排列
-// （注意力的单位是项目：同一项目的几件事一起处理，切换成本最低；不做跨项目平铺的待办清单）。
-// 下面是全部项目块，点进去看单项目看板。
+// 项目看板。第一屏是一张项目清单，分三级（注意力的单位是项目：同一项目的几件事一起处理，切换成本最低；
+// 不做跨项目平铺的待办清单）：
+//   1. 每个项目一行：阶段、要你做的事各几件、会话状态；项目按登记顺序固定，不按紧急程度重排；
+//   2. 有事要你批准或拍板的项目默认展开前几件，只有动手、待你看的默认收起，没事的只剩一行；
+//   3. 进入项目看分列看板。
 // 数据三份：
 //   各项目的 cards.json：主脑用卡片命令（board/card.py）记事件，命令生成这份“现在”；
 //   ~/.claude/board/live/：每个会话由 board/live.sh 写下自己的实况（在跑、等你批准、停了）；
@@ -19,11 +21,16 @@ const HOUR = 3_600_000
 const STALL_MS = 3 * HOUR // 进行中的卡，会话停了超过这么久算停滞
 const LIVE_MAX_AGE = 3 * DAY // 更旧的实况文件当作不在线
 const PENDING_TTL = 10 * 60_000 // 留给主脑的待填内容，过期不填
-const DELIVERED_DAYS = 3 // 新交付在队列里留几天
+const REVIEW_DAYS = 7 // 主脑请你看的交付，没点“看过了”最多留几天
+const PREVIEW = 3 // 展开的项目先列几件
+const DONE_SHOW = 5 // 项目页已完成列先显示几件
+const SEEN = 'board:seen' // 本机记下的“看过了”：项目键:卡片编号:完成日期 → 时刻
 
 const open = atom({ plugin: 'orchestrator', key: 'open' } as const, '')
 const colTab = atom({ plugin: 'orchestrator', key: 'col' } as const, 'todo')
 const showFrozen = atom({ plugin: 'orchestrator', key: 'showFrozen' } as const, false)
+const fold = atom({ plugin: 'orchestrator', key: 'fold' } as const, {} as Record<string, 'open' | 'closed' | 'all'>)
+const showAllDone = atom({ plugin: 'orchestrator', key: 'showAllDone' } as const, false)
 const prevVisit = atom({ plugin: 'orchestrator', key: 'prevVisit' } as const, 0)
 const rev = atom({ plugin: 'orchestrator', key: 'rev' } as const, 0)
 
@@ -63,7 +70,6 @@ const COLS: { key: Column; label: string; color: string }[] = [
 const COLUMN_LABEL: Record<Column, string> = { todo: '待办', doing: '进行中', verify: '待验收', done: '已完成', frozen: '冻结' }
 
 // 响应式断点（单位：面板的字符格宽）
-const TILE_MIN = 36
 const COLUMN_MIN = 30
 
 // ---------- 路径：家目录在会话开始时取一次 ----------
@@ -196,8 +202,29 @@ async function enter($: EngineInterface, key: string) {
   await update($, prevVisit, () => visits[key] ?? 0)
   await $.store.set(VISITS, { ...visits, [key]: Date.now() })
   await update($, colTab, () => 'todo')
+  await update($, showAllDone, () => false)
   await update($, open, () => key)
 }
+
+// ---------- 看过了：只记在本机 ----------
+type Seen = Record<string, number>
+const seenKey = (project: string, c: Card) => `${project}:${c.id}:${c.doneAt ?? ''}`
+const loadSeen = async ($: EngineInterface) => ((await $.store.get(SEEN)) ?? {}) as Seen
+
+async function markSeen($: EngineInterface, project: string, c: Card) {
+  const seen = await loadSeen($)
+  const keep: Seen = {}
+  // 只留近 30 天的记录，免得越攒越多
+  for (const [k, t] of Object.entries(seen)) if (Date.now() - t < 30 * DAY) keep[k] = t
+  keep[seenKey(project, c)] = Date.now()
+  await $.store.set(SEEN, keep)
+  await update($, rev, n => n + 1)
+}
+
+// 主脑请你看、还没看过、没过期的交付
+const toReview = (project: string, c: Card, seen: Seen) =>
+  c.column === 'done' && c.review === true && c.evidence !== undefined && c.doneAt !== null &&
+  Date.now() - Date.parse(c.doneAt) < REVIEW_DAYS * DAY && seen[seenKey(project, c)] === undefined
 
 // ---------- 会话实况 ----------
 type Pulse = { kind: 'waiting' | 'running' | 'error' | 'stalled' | 'idle' | 'offline'; ms: number }
@@ -293,13 +320,13 @@ const byPriority = (a: Card, b: Card) =>
 // ---------- “现在要我做的”队列 ----------
 type Item = {
   key: string
-  kind: 'waiting' | 'decide' | 'act' | 'delivered'
+  kind: 'waiting' | 'decide' | 'act' | 'review'
   project: Loaded & { data: Project }
   card?: Card
   session?: LiveSession
   ageMs: number | undefined
 }
-const ITEM_ORDER: Record<Item['kind'], number> = { waiting: 0, decide: 1, act: 2, delivered: 3 }
+const ITEM_ORDER: Record<Item['kind'], number> = { waiting: 0, decide: 1, act: 2, review: 3 }
 
 // 本项目里等你批准的会话：卡片关联的，或者在本项目目录里跑的未登记会话
 function waitingIn(l: Loaded, live: Map<string, LiveSession>): { session: LiveSession; card: Card | undefined }[] {
@@ -315,7 +342,7 @@ function waitingIn(l: Loaded, live: Map<string, LiveSession>): { session: LiveSe
   return out
 }
 
-function queueOf(projects: Loaded[], live: Map<string, LiveSession>): Item[] {
+function queueOf(projects: Loaded[], live: Map<string, LiveSession>, seen: Seen): Item[] {
   const items: Item[] = []
   for (const l of projects) {
     if (l.data === undefined) continue
@@ -330,9 +357,9 @@ function queueOf(projects: Loaded[], live: Map<string, LiveSession>): Item[] {
       if (c.ball === 'you' && c.column !== 'done' && c.askKind !== null) {
         items.push({ key: `c:${l.key}:${c.id}`, kind: c.askKind, project: proj, card: c, ageMs: since })
       }
-      // 2. 新交付：带验证产物、最近几天完成的，给用户看录屏
-      if (c.column === 'done' && c.evidence !== undefined && c.doneAt !== null && Date.now() - Date.parse(c.doneAt) < DELIVERED_DAYS * DAY) {
-        items.push({ key: `d:${l.key}:${c.id}`, kind: 'delivered', project: proj, card: c, ageMs: Date.now() - Date.parse(c.doneAt) })
+      // 2. 待你看：主脑合入时明确请你看的（done --review），点“看过了”就消失
+      if (toReview(l.key, c, seen)) {
+        items.push({ key: `r:${l.key}:${c.id}`, kind: 'review', project: proj, card: c, ageMs: Date.now() - Date.parse(c.doneAt!) })
       }
     }
   }
@@ -391,6 +418,9 @@ export const register: Register = on => {
     const tab = await read($, colTab)
     const frozenOpen = await read($, showFrozen)
     const prev = await read($, prevVisit)
+    const folds = await read($, fold)
+    const allDone = await read($, showAllDone)
+    const seen = await loadSeen($)
 
     // 实心色块：白字彩底，用于“要你动”和醒目提醒
     const pill = (label: string, color: string) => (
@@ -533,6 +563,9 @@ export const register: Register = on => {
         <Button key={key} plain label="带去主脑 ›" onPress={press => handoff($, p, c, press.surface)} />
       )
     )
+    const seenButton = (key: string, project: string, c: Card) => (
+      <Button key={key} variant="primary" label="看过了" onPress={() => void markSeen($, project, c)} />
+    )
     const evidenceButton = (key: string, root: string, c: Card) =>
       c.evidence === undefined ? null : (
         <Button key={key} plain label="看验证产物 ›"
@@ -557,6 +590,7 @@ export const register: Register = on => {
         if (pc !== null) parts.push(pc)
         if (c.priority !== null) parts.push(soft(`P${c.priority}`, PRIORITY_COLOR[c.priority] ?? C.grey))
         parts.push(soft(c.kind, KIND_COLOR[c.kind] ?? C.grey))
+        if (toReview(proj.key, c, seen)) parts.push(pill('待你看', C.green))
         if (c.milestone) parts.push(soft('◆ 阶段目标', C.teal))
         if (typeof c.rejects === 'number' && c.rejects > 0) parts.push(soft(`打回 ${c.rejects} 次`, C.amber))
         if (isStr(c.causedBy) && c.causedBy !== '') parts.push(soft(`返工自 ${c.causedBy}`, C.red))
@@ -587,6 +621,7 @@ export const register: Register = on => {
               </Box>
             )}
             <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="center">
+              {toReview(proj.key, c, seen) && seenButton(`seen:${c.id}`, proj.key, c)}
               {handoffButton(`handoff:${c.id}`, p, c)}
               {evidenceButton(`evidence:${c.id}`, proj.root, c)}
               {d !== undefined && c.column !== 'done' && (
@@ -599,16 +634,23 @@ export const register: Register = on => {
 
       const columnView = (k: Column) => {
         const meta = COLS.find(x => x.key === k) ?? COLS[0]!
-        const list = p.cards.filter(c => c.column === k).sort(byPriority)
+        const all = p.cards.filter(c => c.column === k)
+        // 已完成按完成日期从新到旧，只先显示几件
+        const sorted = k === 'done' ? all.sort((a, b) => (b.doneAt ?? '').localeCompare(a.doneAt ?? '')) : all.sort(byPriority)
+        const list = k === 'done' && !allDone ? sorted.slice(0, DONE_SHOW) : sorted
         return (
           <Box key={`col:${k}`} flexDirection="column" gap="sm" padding="sm"
             backgroundColor={tint(meta.color, 0.07)} width={pct(Math.min(n, 4))}>
             <Box flexDirection="row" gap="xs" alignItems="center">
               <Text color={meta.color} weight="bold">● {meta.label}</Text>
-              {soft(String(list.length), meta.color)}
+              {soft(String(all.length), meta.color)}
             </Box>
             {list.length === 0 && <Text size="caption" dimColor>（空）</Text>}
             {list.map(cardView)}
+            {k === 'done' && sorted.length > DONE_SHOW && (
+              <Button key="done-more" plain onPress={() => update($, showAllDone, v => !v)}
+                label={allDone ? '▴ 只看最近 5 件' : `▾ 更早的 ${sorted.length - DONE_SHOW} 件`} />
+            )}
             {k === 'todo' && p.leftovers > 0 && (
               <Text size="caption" dimColor>＋ 遗留小项 {p.leftovers} 件（在台账里，由主脑挑出来排期）</Text>
             )}
@@ -622,7 +664,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" gap="md" paddingX="xs">
           <Box flexDirection="row">
-            <Button key="back" onPress={() => update($, open, () => '')} label="← 现在要我做的" />
+            <Button key="back" onPress={() => update($, open, () => '')} label="← 全部项目" />
           </Box>
 
           <Box flexDirection="column" gap="sm" padding="sm" borderStyle="round"
@@ -682,14 +724,17 @@ export const register: Register = on => {
       )
     }
 
-    // ---------- 第一屏：现在要我做的 ----------
-    const queue = queueOf(projects, live)
+    // ---------- 第一屏：项目清单 ----------
+    const queue = queueOf(projects, live, seen)
     const ITEM_LABEL: Record<Item['kind'], [string, string]> = {
       waiting: ['等你批准', C.red],
       decide: ['等你拍板', C.red],
       act: ['等你动手', C.orange],
-      delivered: ['新交付', C.green],
+      review: ['待你看', C.green],
     }
+    const KIND_ORDER: Item['kind'][] = ['waiting', 'decide', 'act', 'review']
+
+    // 一件要你做的事：一行标签和标题，一行说明和按钮
     const itemView = (it: Item) => {
       const [label, color] = ITEM_LABEL[it.kind]
       const p = it.project.data
@@ -697,140 +742,123 @@ export const register: Register = on => {
       const title = c?.title ?? '未登记到卡片的会话'
       const what =
         it.kind === 'waiting' ? '会话弹出了权限确认，停在那里等你' :
-        it.kind === 'delivered' ? '已合入，看验证产物确认是不是你要的' :
+        it.kind === 'review' ? '主脑请你看验证产物，确认是不是你要的' :
         c?.ask ?? ''
       return (
-        <Box key={`item:${it.key}`} flexDirection="column" padding="xs" gap="xs" backgroundColor={tint(color, 0.06)}>
-          {chips([
-            pill(label, color),
-            ...(c?.priority != null ? [soft(`P${c.priority}`, PRIORITY_COLOR[c.priority] ?? C.grey)] : []),
-          ])}
-          <Text weight="semibold">{title}</Text>
-          {what !== '' && <Text size="footnote">{what}</Text>}
+        <Box key={`item:${it.key}`} flexDirection="column" paddingX="xs" gap="xs" backgroundColor={tint(color, 0.06)}>
+          <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
+            {pill(label, color)}
+            {c?.priority != null && soft(`P${c.priority}`, PRIORITY_COLOR[c.priority] ?? C.grey)}
+            <Text weight="semibold">{title}</Text>
+          </Box>
+          <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="center">
+            {what !== '' && <Text size="footnote">{what}</Text>}
+            {it.ageMs !== undefined && (
+              <Text size="caption" dimColor>{it.kind === 'review' ? `${ageText(it.ageMs)}前完成` : `已等 ${ageText(it.ageMs)}`}</Text>
+            )}
+          </Box>
           <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="center">
             {it.kind === 'waiting' && it.session !== undefined && (
               <Button key={`go:${it.key}`} variant="primary" label="去这个会话 ›"
                 onPress={() => void openUrl($, sessionLink(it.session!.id))} />
             )}
-            {it.kind === 'delivered' && c !== undefined && evidenceButton(`ev:${it.key}`, it.project.root, c)}
+            {it.kind === 'review' && c !== undefined && evidenceButton(`ev:${it.key}`, it.project.root, c)}
+            {it.kind === 'review' && c !== undefined && seenButton(`seen:${it.key}`, it.project.key, c)}
             {(it.kind === 'decide' || it.kind === 'act') && c !== undefined && handoffButton(`handoff:${it.key}`, p, c, true)}
-            {it.kind === 'delivered' && c !== undefined && handoffButton(`handoff:${it.key}`, p, c)}
-            {it.ageMs !== undefined && (
-              <Text size="caption" dimColor>{it.kind === 'delivered' ? `${ageText(it.ageMs)}前完成` : `已等 ${ageText(it.ageMs)}`}</Text>
-            )}
+            {it.kind === 'review' && c !== undefined && handoffButton(`handoff:${it.key}`, p, c)}
           </Box>
         </Box>
       )
     }
 
-    // 按项目分组；项目按登记顺序（queue 已按 等批准 > 拍板 > 动手 > 新交付、优先级、等待时长 排好组内顺序）
-    const KIND_ORDER: Item['kind'][] = ['waiting', 'decide', 'act', 'delivered']
-    const groups = projects
-      .map(l => ({ l: l as Loaded & { data: Project }, items: queue.filter(it => it.project.key === l.key) }))
-      .filter(g => g.items.length > 0)
+    const setFold = (key: string, v: 'open' | 'closed' | 'all') => update($, fold, f => ({ ...f, [key]: v }))
 
-    const n = perRow(width, TILE_MIN, 3)
-    const visits = ((await $.store.get(VISITS)) ?? {}) as Record<string, number>
-
-    // 项目块：标题行、阶段目标、进度、统计、等你、会话、信任指标、角注
-    const tile = (l: Loaded) => {
+    // 一个项目一行；展开时列出要你做的事
+    const row = (l: Loaded) => {
+      const frame = (children: ReturnType<typeof soft>, color: string) => (
+        <Box key={`row:${l.key}`} flexDirection="column" borderStyle="round" borderColor={color}
+          paddingX="sm" paddingY="xs" gap="xs">
+          {children}
+        </Box>
+      )
+      const enterButton = (strong: boolean) => (
+        <Button key={`enter:${l.key}`} variant={strong ? 'primary' : 'secondary'}
+          onPress={() => void enter($, l.key)} label="进入项目 ›" />
+      )
       if (l.missing) {
-        return (
-          <Box key={`tile:${l.key}`} flexDirection="column" borderStyle="round" borderColor="promptBorder"
-            padding="sm" gap="xs" width={pct(n)}>
-            <Text size="heading" weight="bold">{l.key}</Text>
+        return frame(
+          <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="center">
+            <Text weight="bold" dimColor>{l.key}</Text>
             {soft('还没迁移到卡片', C.grey)}
             <Text size="caption" dimColor>主脑下次被唤醒时用卡片命令建立</Text>
-          </Box>
-        )
+          </Box>, 'promptBorder')
       }
       if (l.data === undefined) {
-        return (
-          <Box key={`tile:${l.key}`} flexDirection="column" borderStyle="round" borderColor={C.red}
-            padding="sm" gap="xs" width={pct(n)}>
-            <Text size="heading" weight="bold">{l.key}</Text>
-            {pill('卡片文件格式不合格', C.red)}
+        return frame(
+          <Box flexDirection="column" gap="xs">
+            <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="center">
+              <Text weight="bold">{l.key}</Text>
+              {pill('卡片文件格式不合格', C.red)}
+            </Box>
             {l.problems.slice(0, 3).map(t => <Text size="caption" color={C.red}>· {t}</Text>)}
             {l.problems.length > 3 && <Text size="caption" dimColor>还有 {l.problems.length - 3} 个问题</Text>}
             <Text size="caption" dimColor>让主脑用卡片命令的 check 重新生成</Text>
-          </Box>
-        )
+          </Box>, C.red)
       }
       const p = l.data
       const s = stats(l as Loaded & { data: Project })
       const act = activityOf(l.activityMs)
-      const youTotal = s.decide + s.act + s.waiting
-
-      return (
-        <Box key={`tile:${l.key}`} flexDirection="column" borderStyle="round"
-          borderColor={act.isStale ? C.red : youTotal > 0 ? C.orange : 'promptBorder'}
-          hover={{ borderColor: C.blue, backgroundColor: tint(C.blue, 0.05) }}
-          padding="sm" gap="sm" width={pct(n)}>
-          <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" gap="xs">
-            <Text size="heading" weight="bold">{p.project}</Text>
-            {p.stage !== null ? soft(p.stage, C.teal) : soft('阶段目标未定', C.orange)}
+      const items = queue.filter(it => it.project.key === l.key)
+      const urgent = items.some(i => i.kind === 'waiting' || i.kind === 'decide')
+      const state = items.length === 0 ? 'closed' : folds[l.key] ?? (urgent ? 'open' : 'closed')
+      const shown = state === 'all' ? items : state === 'open' ? items.slice(0, PREVIEW) : []
+      const counts = KIND_ORDER.filter(k => items.some(i => i.kind === k)).map(k => {
+        const [label, color] = ITEM_LABEL[k]
+        const num = items.filter(i => i.kind === k).length
+        return k === 'review' ? soft(`${label} ${num}`, color) : pill(`${label} ${num}`, color)
+      })
+      return frame(
+        <Box flexDirection="column" gap="xs">
+          <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" gap="sm">
+            <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
+              <Text weight="bold" dimColor={items.length === 0}>{p.project}</Text>
+              {p.stage !== null ? soft(p.stage, C.teal) : soft('阶段目标未定', C.orange)}
+              {counts}
+              {items.length === 0 && <Text size="caption" dimColor>没有等你的事</Text>}
+              {s.stalled > 0 && pill(`会话停滞 ${s.stalled}`, C.amber)}
+              {s.running > 0 && soft(`● 在跑 ${s.running}`, C.blue)}
+              {act.isStale && pill(act.text, C.red)}
+            </Box>
+            <Box flexDirection="row" gap="xs" alignItems="center">
+              {items.length > 0 && (
+                <Button key={`fold:${l.key}`} plain label={state === 'closed' ? '▸ 展开' : '▾ 收起'}
+                  onPress={() => setFold(l.key, state === 'closed' ? 'open' : 'closed')} />
+              )}
+              {enterButton(urgent)}
+            </Box>
           </Box>
-          {p.stageGoal !== null && <Text size="footnote" dimColor>{p.stageGoal}</Text>}
-          {progress(s, 200)}
-          {stats4([
-            statBlock(s.doing, '进行中', C.blue),
-            statBlock(s.verify, '待验收', C.amber),
-            statBlock(s.todo, '待办', C.purple),
-          ])}
-          {waitingChips(s)}
-          {liveChips(s)}
-          {trust(p)}
-          <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
-            {act.isStale ? pill(act.text, C.red) : <Text size="caption" dimColor>{act.text}</Text>}
-            <Text size="caption" dimColor>· {visitText(visits[l.key] ?? 0)}</Text>
-          </Box>
-          <Box flexDirection="row" justifyContent="flex-end">
-            <Button key={`enter:${l.key}`} variant={youTotal > 0 ? 'primary' : 'secondary'}
-              onPress={() => void enter($, l.key)} label="进入项目 ›" />
-          </Box>
-        </Box>
-      )
+          {shown.map(itemView)}
+          {state === 'open' && items.length > PREVIEW && (
+            <Button key={`more:${l.key}`} plain onPress={() => setFold(l.key, 'all')}
+              label={`▾ 还有 ${items.length - PREVIEW} 件`} />
+          )}
+        </Box>,
+        urgent ? C.red : items.length > 0 ? C.orange : 'promptBorder')
     }
 
+    const total = (k: Item['kind']) => queue.filter(i => i.kind === k).length
     return (
-      <Box flexDirection="column" gap="md" paddingX="xs">
+      <Box flexDirection="column" gap="sm" paddingX="xs">
         <Box flexDirection="column">
-          <Text size="title" weight="bold">现在要我做的</Text>
+          <Text size="title" weight="bold">项目</Text>
           <Text size="caption" dimColor>
-            只列有事等你的项目，按项目分组、位置固定。点“带去主脑”会跳到主脑会话并自动填好卡片内容。
+            {queue.length === 0
+              ? '没有等你的事。'
+              : KIND_ORDER.filter(k => total(k) > 0).map(k => `${ITEM_LABEL[k][0]} ${total(k)}`).join(' · ')}
+            {' '}项目按固定顺序排列；要你批准或拍板的项目自动展开。
           </Text>
         </Box>
-        {groups.length === 0 ? (
-          <Box padding="sm" borderStyle="round" borderColor={C.green}>
-            <Text color={C.green} weight="semibold">没有等你的事</Text>
-          </Box>
-        ) : (
-          <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="flex-start">
-            {groups.map(g => (
-              <Box key={`g:${g.l.key}`} width={pct(n)} flexDirection="column" borderStyle="round"
-                borderColor={g.items.some(i => i.kind === 'waiting' || i.kind === 'decide') ? C.red : C.orange} padding="sm" gap="sm">
-                <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" alignItems="center" gap="xs">
-                  <Text size="heading" weight="bold">{g.l.data.project}</Text>
-                  {g.l.data.stage !== null && soft(g.l.data.stage, C.teal)}
-                </Box>
-                {chips(KIND_ORDER.filter(k => g.items.some(i => i.kind === k))
-                  .map(k => soft(`${ITEM_LABEL[k][0]} ${g.items.filter(i => i.kind === k).length}`, ITEM_LABEL[k][1])))}
-                {g.items.map(itemView)}
-                <Box flexDirection="row" justifyContent="flex-end">
-                  <Button key={`genter:${g.l.key}`} plain onPress={() => void enter($, g.l.key)} label="进入项目 ›" />
-                </Box>
-              </Box>
-            ))}
-          </Box>
-        )}
-
-        <Box flexDirection="column">
-          <Text size="heading" weight="bold">项目</Text>
-          <Text size="caption" dimColor>项目按固定顺序排列，不按紧急程度重排。</Text>
-        </Box>
-        <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="flex-start">
-          {projects.map(tile)}
-        </Box>
+        {projects.map(row)}
       </Box>
     )
   })
