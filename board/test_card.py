@@ -121,6 +121,9 @@ class Card(unittest.TestCase):
         self.run_card("done", "D-1", ok=False)       # 待审的决策卡不能直接完成
         self.run_card("approve", "F-1", ok=False)    # 只有决策卡走审批
         self.run_card("veto", "D-2", "--reason", "", ok=False)  # 否决必须写原因
+        # 原因只有空白：由命令当场挡下（不是靠生成后的格式检查兜底），不落事件
+        p = self.run_card("veto", "D-2", "--reason", "   ", ok=False)
+        self.assertIn("否决要写原因", p.stderr)
         self.run_card("veto", "D-2", ok=False)
         self.assertEqual(len(self.events()), before)
         self.run_card("approve", "D-1", "--note", "lee：就按推荐的渠道二")
