@@ -106,6 +106,74 @@ class Card(unittest.TestCase):
         self.run_card("drop", "D-1", "--reason", "重复")
         self.assertEqual(self.cards()["cards"], [])
 
+    def test_approval(self):
+        self.init()
+        self.run_card("new", "D-1", "--title", "选渠道", "--kind", "决策", "--priority", "1", "--now", "已查清")
+        self.run_card("new", "D-2", "--title", "定费率", "--kind", "决策", "--priority", "2", "--now", "已查清")
+        self.run_card("new", "F-1", "--title", "接入", "--kind", "功能", "--priority", "1", "--now", "待派")
+        by = lambda: {c["id"]: c for c in self.cards()["cards"]}
+        # 新建的决策卡默认待审，非决策卡没有审批状态
+        self.assertEqual(by()["D-1"]["approval"], "pending")
+        self.assertNotIn("approval", by()["F-1"])
+        self.assertIn("【待审】", self.run_card("show").stdout)
+        self.run_card("ask", "D-1", "--decide", "--ask", "在三个渠道里选一个")
+        before = len(self.events())
+        self.run_card("done", "D-1", ok=False)       # 待审的决策卡不能直接完成
+        self.run_card("approve", "F-1", ok=False)    # 只有决策卡走审批
+        self.run_card("veto", "D-2", "--reason", "", ok=False)  # 否决必须写原因
+        self.run_card("veto", "D-2", ok=False)
+        self.assertEqual(len(self.events()), before)
+        self.run_card("approve", "D-1", "--note", "lee：就按推荐的渠道二")
+        c = by()["D-1"]
+        self.assertEqual((c["approval"], c["approvalNote"], c["approvalAt"], c["column"], c["ball"], c["ask"], c["now"]),
+                         ("approved", "lee：就按推荐的渠道二", "2026-11-17", "done", "brain", "", "已通过"))
+        self.run_card("approve", "D-1", ok=False)    # 不重复通过
+        self.run_card("veto", "D-2", "--reason", "费率太高", "--now", "改谈阶梯费率")
+        c = by()["D-2"]
+        self.assertEqual((c["approval"], c["approvalNote"], c["column"], c["now"]), ("vetoed", "费率太高", "done", "改谈阶梯费率"))
+        out = self.run_card("show").stdout
+        self.assertIn("【通过】", out)
+        self.assertIn("【否决】", out)
+        self.assertNotIn("等用户", out)
+        log = self.run_card("log").stdout
+        self.assertIn("D-1 审批通过：lee：就按推荐的渠道二", log)
+        self.assertIn("D-2 审批否决：费率太高", log)
+        # 否决后重新提审：回待办、再请用户拍板，回到待审
+        self.run_card("move", "D-2", "todo")
+        self.assertEqual(by()["D-2"]["approval"], "vetoed")
+        self.run_card("ask", "D-2", "--decide", "--ask", "认阶梯费率")
+        c = by()["D-2"]
+        self.assertEqual(c["approval"], "pending")
+        self.assertNotIn("approvalNote", c)
+        # 已审批的决策卡过了 14 天也不下架：挪进 decided，按“通过”“否决”筛选时查得到
+        self.now = "2026-12-20T10:00:00+08:00"
+        self.run_card("check")
+        d = self.cards()
+        self.assertNotIn("D-1", [c["id"] for c in d["cards"]])
+        self.assertEqual([(c["id"], c["approval"]) for c in d["decided"]], [("D-1", "approved")])
+        self.assertIn("更早审批过的决策", self.run_card("show").stdout)
+
+    def test_legacy_decisions_replay(self):
+        """旧事件不带审批状态：没完成的决策卡视为待审，已完成的不标；已完成的旧卡可以补记审批，不动完成日期。"""
+        legacy = [
+            {"at": "2026-11-10T10:00:00+08:00", "op": "project", "project": "旧", "brainName": "b", "brainId": "local_b"},
+            {"at": "2026-11-10T10:00:00+08:00", "op": "new", "card": "D-1", "title": "旧决策一", "kind": "决策", "priority": 1, "now": "等拍板"},
+            {"at": "2026-11-10T10:00:00+08:00", "op": "ask", "card": "D-1", "ask": "拍板", "askKind": "decide"},
+            {"at": "2026-11-10T10:00:00+08:00", "op": "new", "card": "D-2", "title": "旧决策二", "kind": "决策", "priority": 3, "now": "暂按推荐写"},
+            {"at": "2026-11-10T10:00:00+08:00", "op": "new", "card": "D-3", "title": "旧决策三", "kind": "决策", "priority": 2, "now": "定了"},
+            {"at": "2026-11-11T10:00:00+08:00", "op": "done", "card": "D-3"},
+        ]
+        with open(os.path.join(self.dir, "events.jsonl"), "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in legacy))
+        self.run_card("check")
+        by = {c["id"]: c for c in self.cards()["cards"]}
+        self.assertEqual(by["D-1"]["approval"], "pending")
+        self.assertEqual(by["D-2"]["approval"], "pending")
+        self.assertNotIn("approval", by["D-3"])
+        self.run_card("approve", "D-3", "--note", "补记：11-11 口头同意")
+        c = {c["id"]: c for c in self.cards()["cards"]}["D-3"]
+        self.assertEqual((c["approval"], c["doneAt"]), ("approved", "2026-11-11"))
+
     def test_done_cards_leave_board_after_window(self):
         self.init()
         self.run_card("new", "E-1", "--title", "部署", "--kind", "事务", "--priority", "2", "--now", "待做")

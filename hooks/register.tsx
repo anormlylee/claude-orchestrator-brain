@@ -1,13 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { Register, EngineInterface } from 'claude-code'
 
-import type { Card, Column, LiveSession, Project, Registry, RegistryEntry, Window } from '../types'
+import type { Approval, Card, Column, LiveSession, Project, Registry, RegistryEntry, Window } from '../types'
 
 // 项目看板。第一屏是一张项目清单，分三级（注意力的单位是项目：同一项目的几件事一起处理，切换成本最低；
 // 不做跨项目平铺的待办清单）：
 //   1. 每个项目一行：阶段、要你做的事各几件、会话状态；项目按登记顺序固定，不按紧急程度重排；
-//   2. 有事要你批准或拍板的项目默认展开前几件，只有动手、待你看的默认收起，没事的只剩一行；
-//   3. 进入项目看分列看板。
+//   2. 有事要你批准或待审的项目默认展开前几件，只有动手、待你看的默认收起，没事的只剩一行；
+//   3. 进入项目看分列看板；决策卡可按审批状态（待审、通过、否决）筛选，一眼看清哪些定了、哪些没定。
 // 数据三份：
 //   各项目的 cards.json：主脑用卡片命令（board/card.py）记事件，命令生成这份“现在”；
 //   ~/.claude/board/live/：每个会话由 board/live.sh 写下自己的实况（在跑、等你批准、停了）；
@@ -31,6 +31,7 @@ const colTab = atom({ plugin: 'orchestrator', key: 'col' } as const, 'todo')
 const showFrozen = atom({ plugin: 'orchestrator', key: 'showFrozen' } as const, false)
 const fold = atom({ plugin: 'orchestrator', key: 'fold' } as const, {} as Record<string, 'open' | 'closed' | 'all'>)
 const showAllDone = atom({ plugin: 'orchestrator', key: 'showAllDone' } as const, false)
+const approvalTab = atom({ plugin: 'orchestrator', key: 'approvalTab' } as const, 'all')
 const prevVisit = atom({ plugin: 'orchestrator', key: 'prevVisit' } as const, 0)
 const rev = atom({ plugin: 'orchestrator', key: 'rev' } as const, 0)
 
@@ -46,6 +47,7 @@ const C = {
   amber: '#9a6700',
   pink: '#bf3989',
   cyan: '#0598bc',
+  slate: '#57606a',
 }
 const tint = (hex: string, a = 0.16) => {
   const n = parseInt(hex.slice(1), 16)
@@ -60,6 +62,21 @@ const KIND_COLOR: Record<string, string> = {
   事务: C.grey,
 }
 const PRIORITY_COLOR: Record<number, string> = { 1: C.red, 2: C.amber, 3: C.grey }
+
+// 审批状态（和常规办公审批一样：待审、通过、否决），主要给决策卡用
+const APPROVAL: Record<Approval, { label: string; color: string; hint: string }> = {
+  pending: { label: '待审', color: C.red, hint: '还没定，等你审' },
+  approved: { label: '通过', color: C.green, hint: '已定，含更早审批过的' },
+  vetoed: { label: '否决', color: C.slate, hint: '没采纳，记录保留' },
+}
+const APPROVAL_KEYS: Approval[] = ['pending', 'approved', 'vetoed']
+// 卡片命令已经算好审批状态；旧版命令生成的文件没有这一栏，没完成的决策卡同样算待审
+const approvalOf = (c: Card): Approval | undefined =>
+  c.approval ?? (c.kind === '决策' && c.column !== 'done' ? 'pending' : undefined)
+// 待你审：待审的决策卡，加上球在你、要你拍板的卡
+const isPending = (c: Card) =>
+  c.column !== 'done' && (approvalOf(c) === 'pending' || (c.ball === 'you' && c.askKind === 'decide'))
+const isAct = (c: Card) => c.column !== 'done' && c.ball === 'you' && c.askKind === 'act' && !isPending(c)
 
 const COLS: { key: Column; label: string; color: string }[] = [
   { key: 'todo', label: '待办', color: C.purple },
@@ -203,6 +220,7 @@ async function enter($: EngineInterface, key: string) {
   await $.store.set(VISITS, { ...visits, [key]: Date.now() })
   await update($, colTab, () => 'todo')
   await update($, showAllDone, () => false)
+  await update($, approvalTab, () => 'all')
   await update($, open, () => key)
 }
 
@@ -252,12 +270,17 @@ type Surface = Parameters<EngineInterface['ui']['copy']>[0]['surface']
 
 function handoffText(p: Project, c: Card): string {
   const status: string[] = [COLUMN_LABEL[c.column], c.kind]
+  const a = approvalOf(c)
+  if (a !== undefined) status.push(APPROVAL[a].label)
   if (c.priority !== null) status.push(`P${c.priority}`)
   if (c.milestone) status.push('阶段目标')
   const lines = [`关于看板卡片「${c.title}」（${p.project}，卡片编号 ${c.id}）`, `- 状态：${status.join('，')}`]
   if (c.now !== '') lines.push(`- 现状：${c.now}`)
   if (c.ball === 'you' && c.column !== 'done' && c.ask !== '') {
-    lines.push(`- 等我${c.askKind === 'decide' ? '拍板' : '动手'}：${c.ask}`)
+    lines.push(`- ${isPending(c) ? '待我审' : '等我动手'}：${c.ask}`)
+  }
+  if ((a === 'approved' || a === 'vetoed') && isStr(c.approvalNote) && c.approvalNote !== '') {
+    lines.push(`- ${a === 'approved' ? '通过依据' : '否决原因'}：${c.approvalNote}`)
   }
   if (c.ball === 'external' && c.column !== 'done') lines.push('- 在等外部')
   if (c.blocked !== '') lines.push(`- 阻塞：${c.blocked}`)
@@ -354,10 +377,10 @@ function queueOf(projects: Loaded[], live: Map<string, LiveSession>, seen: Seen)
     for (const c of l.data.cards) {
       if (c.column === 'frozen') continue
       const since = c.since === null ? undefined : Date.now() - Date.parse(c.since)
-      if (c.ball === 'you' && c.column !== 'done' && c.askKind !== null) {
-        items.push({ key: `c:${l.key}:${c.id}`, kind: c.askKind, project: proj, card: c, ageMs: since })
-      }
-      // 2. 待你看：主脑合入时明确请你看的（done --review），点“看过了”就消失
+      // 2. 待审（要你拍板）和要你动手的
+      if (isPending(c)) items.push({ key: `c:${l.key}:${c.id}`, kind: 'decide', project: proj, card: c, ageMs: since })
+      else if (isAct(c)) items.push({ key: `c:${l.key}:${c.id}`, kind: 'act', project: proj, card: c, ageMs: since })
+      // 3. 待你看：主脑合入时明确请你看的（done --review），点“看过了”就消失
       if (toReview(l.key, c, seen)) {
         items.push({ key: `r:${l.key}:${c.id}`, kind: 'review', project: proj, card: c, ageMs: Date.now() - Date.parse(c.doneAt!) })
       }
@@ -420,6 +443,7 @@ export const register: Register = on => {
     const prev = await read($, prevVisit)
     const folds = await read($, fold)
     const allDone = await read($, showAllDone)
+    const apSel = await read($, approvalTab)
     const seen = await loadSeen($)
 
     // 实心色块：白字彩底，用于“要你动”和醒目提醒
@@ -474,7 +498,6 @@ export const register: Register = on => {
       const p = l.data
       const live2 = p.cards.filter(c => c.column !== 'frozen')
       const col = (k: Column) => live2.filter(c => c.column === k).length
-      const you = live2.filter(c => c.ball === 'you' && c.column !== 'done')
       const ms = live2.filter(c => c.milestone)
       const pulses = live2.map(c => pulseOf(c, live)).filter((x): x is Pulse => x !== undefined)
       return {
@@ -483,8 +506,8 @@ export const register: Register = on => {
         verify: col('verify'),
         done: col('done'),
         frozen: p.cards.length - live2.length,
-        decide: you.filter(c => c.askKind === 'decide').length,
-        act: you.filter(c => c.askKind === 'act').length,
+        decide: live2.filter(isPending).length,
+        act: live2.filter(isAct).length,
         external: live2.filter(c => c.ball === 'external' && c.column !== 'done').length,
         msTotal: ms.length,
         msDone: ms.filter(c => c.column === 'done').length,
@@ -509,10 +532,10 @@ export const register: Register = on => {
         <Text size="caption" color={C.orange}>还没有阶段目标：由主脑提出，你确认后才有进度</Text>
       )
 
-    // 等你区：拍板、动手、等外部各一个色块
+    // 等你区：待审、动手、等外部各一个色块
     const waitingChips = (s: Stats) => {
       const list: ReturnType<typeof pill>[] = []
-      if (s.decide > 0) list.push(pill(`拍板 ${s.decide}`, C.red))
+      if (s.decide > 0) list.push(pill(`待审 ${s.decide}`, C.red))
       if (s.act > 0) list.push(pill(`动手 ${s.act}`, C.orange))
       if (s.external > 0) list.push(pill(`等外部 ${s.external}`, C.grey))
       if (list.length === 0) list.push(soft('没有等你的事', C.green))
@@ -582,9 +605,12 @@ export const register: Register = on => {
 
       const tags = (c: Card) => {
         const parts: ReturnType<typeof pill>[] = []
-        if (c.ball === 'you' && c.column !== 'done') {
-          parts.push(c.askKind === 'decide' ? pill('等你拍板', C.red) : pill('等你动手', C.orange))
-        }
+        const a = approvalOf(c)
+        // 审批状态色块：待审实心（要你动），通过、否决浅底
+        if (isPending(c)) parts.push(c.column === 'frozen' ? soft('待审', APPROVAL.pending.color) : pill('待审', APPROVAL.pending.color))
+        else if (a === 'approved') parts.push(soft('✓ 通过', APPROVAL.approved.color))
+        else if (a === 'vetoed') parts.push(soft('✗ 否决', APPROVAL.vetoed.color))
+        if (isAct(c)) parts.push(pill('等你动手', C.orange))
         if (c.ball === 'external' && c.column !== 'done') parts.push(pill('等外部', C.grey))
         const pc = pulseChip(pulseOf(c, live))
         if (pc !== null) parts.push(pc)
@@ -601,17 +627,29 @@ export const register: Register = on => {
       const cardView = (c: Card) => {
         const d = daysSinceDate(c.since)
         const isYou = c.ball === 'you' && c.column !== 'done'
+        const a = approvalOf(c)
+        const verdict = a === 'approved' || a === 'vetoed' ? APPROVAL[a] : undefined
         return (
           <Box key={`card:${c.id}`} flexDirection="column" borderStyle="round"
-            borderColor={isYou ? (c.askKind === 'decide' ? C.red : C.orange) : 'promptBorder'}
+            borderColor={isPending(c) && c.column !== 'frozen' ? C.red : isAct(c) ? C.orange : 'promptBorder'}
             padding="sm" gap="xs">
             {tags(c)}
             <Text weight="semibold">{c.title}</Text>
             {c.now !== '' && <Text size="footnote" dimColor>{c.now}</Text>}
             {isYou && c.ask !== '' && (
-              <Box flexDirection="column" padding="xs" backgroundColor={tint(c.askKind === 'decide' ? C.red : C.orange, 0.08)}>
-                <Text size="caption" weight="semibold" color={c.askKind === 'decide' ? C.red : C.orange}>要你</Text>
+              <Box flexDirection="column" padding="xs" backgroundColor={tint(isPending(c) ? C.red : C.orange, 0.08)}>
+                <Text size="caption" weight="semibold" color={isPending(c) ? C.red : C.orange}>{isPending(c) ? '要你审' : '要你'}</Text>
                 <Text size="footnote">{c.ask}</Text>
+              </Box>
+            )}
+            {verdict !== undefined && (
+              <Box flexDirection="column" padding="xs" backgroundColor={tint(verdict.color, 0.08)}>
+                <Text size="caption" weight="semibold" color={verdict.color}>
+                  {a === 'approved' ? '✓ 通过' : '✗ 否决'}{isStr(c.approvalAt) ? ` · ${c.approvalAt}` : ''}
+                </Text>
+                {isStr(c.approvalNote) && c.approvalNote !== '' && (
+                  <Text size="footnote">{a === 'vetoed' ? `原因：${c.approvalNote}` : c.approvalNote}</Text>
+                )}
               </Box>
             )}
             {c.blocked !== '' && (
@@ -661,6 +699,47 @@ export const register: Register = on => {
       const frozen = p.cards.filter(c => c.column === 'frozen')
       const count = (k: Column) => p.cards.filter(c => c.column === k).length
 
+      // 按审批状态筛选：已下板的通过、否决卡（decided）也算在内；冻结的待审卡不算，和第一屏一致
+      const withDecided = [...p.cards, ...(p.decided ?? [])]
+      const ofApproval = (k: Approval) =>
+        withDecided.filter(c => approvalOf(c) === k && !(k === 'pending' && c.column === 'frozen'))
+      const hasApproval = withDecided.some(c => approvalOf(c) !== undefined)
+      const apTab = APPROVAL_KEYS.find(k => k === apSel)
+      const approvalFilter = (
+        <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
+          <Text size="caption" dimColor>审批</Text>
+          <Button key="appr:all" variant={apTab === undefined ? 'primary' : 'secondary'}
+            onPress={() => update($, approvalTab, () => 'all')} label="全部卡片" />
+          {APPROVAL_KEYS.map(k => (
+            <Button key={`appr:${k}`} variant={apTab === k ? 'primary' : 'secondary'}
+              onPress={() => update($, approvalTab, () => k)} label={`${APPROVAL[k].label} ${ofApproval(k).length}`} />
+          ))}
+        </Box>
+      )
+      const approvalView = (k: Approval) => {
+        const meta = APPROVAL[k]
+        const list = ofApproval(k).sort(
+          k === 'pending'
+            ? byPriority
+            : (x, y) => (y.approvalAt ?? y.doneAt ?? '').localeCompare(x.approvalAt ?? x.doneAt ?? ''),
+        )
+        return (
+          <Box key={`appr-view:${k}`} flexDirection="column" gap="sm" padding="sm" backgroundColor={tint(meta.color, 0.07)}>
+            <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
+              <Text color={meta.color} weight="bold">● {meta.label}</Text>
+              {soft(String(list.length), meta.color)}
+              <Text size="caption" dimColor>{meta.hint}</Text>
+            </Box>
+            {list.length === 0 && <Text size="caption" dimColor>（空）</Text>}
+            <Box flexDirection="row" flexWrap="wrap" gap="sm" alignItems="flex-start">
+              {list.map(c => (
+                <Box key={`ap:${c.id}`} flexDirection="column" width={pct(n)}>{cardView(c)}</Box>
+              ))}
+            </Box>
+          </Box>
+        )
+      }
+
       return (
         <Box flexDirection="column" gap="md" paddingX="xs">
           <Box flexDirection="row">
@@ -691,7 +770,9 @@ export const register: Register = on => {
             <Link href={sessionLink(p.brain.id)} label={`→ 进入主脑会话：${p.brain.name}`} />
           </Box>
 
-          {n >= 4 ? (
+          {hasApproval && approvalFilter}
+
+          {apTab !== undefined ? approvalView(apTab) : n >= 4 ? (
             <Box flexDirection="row" gap="sm" alignItems="flex-start">
               {COLS.map(c => columnView(c.key))}
             </Box>
@@ -707,7 +788,7 @@ export const register: Register = on => {
             </Box>
           )}
 
-          {frozen.length > 0 && (
+          {apTab === undefined && frozen.length > 0 && (
             <Box flexDirection="column" gap="sm">
               <Button key="frozen-toggle" plain onPress={() => update($, showFrozen, v => !v)}
                 label={`${frozenOpen ? '▾' : '▸'} 冻结 ${frozen.length} 项`} />
@@ -728,7 +809,7 @@ export const register: Register = on => {
     const queue = queueOf(projects, live, seen)
     const ITEM_LABEL: Record<Item['kind'], [string, string]> = {
       waiting: ['等你批准', C.red],
-      decide: ['等你拍板', C.red],
+      decide: ['待审', C.red],
       act: ['等你动手', C.orange],
       review: ['待你看', C.green],
     }
@@ -743,7 +824,7 @@ export const register: Register = on => {
       const what =
         it.kind === 'waiting' ? '会话弹出了权限确认，停在那里等你' :
         it.kind === 'review' ? '主脑请你看验证产物，确认是不是你要的' :
-        c?.ask ?? ''
+        c === undefined ? '' : c.ask !== '' ? c.ask : c.now
       return (
         <Box key={`item:${it.key}`} flexDirection="column" paddingX="xs" gap="xs" backgroundColor={tint(color, 0.06)}>
           <Box flexDirection="row" flexWrap="wrap" gap="xs" alignItems="center">
@@ -855,7 +936,7 @@ export const register: Register = on => {
             {queue.length === 0
               ? '没有等你的事。'
               : KIND_ORDER.filter(k => total(k) > 0).map(k => `${ITEM_LABEL[k][0]} ${total(k)}`).join(' · ')}
-            {' '}项目按固定顺序排列；要你批准或拍板的项目自动展开。
+            {' '}项目按固定顺序排列；有会话等你批准或有待审的项目自动展开。
           </Text>
         </Box>
         {projects.map(row)}

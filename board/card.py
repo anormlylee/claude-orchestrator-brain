@@ -18,6 +18,9 @@
   card.py review F-3                    给已完成的卡补上“请用户看”
   card.py ask D-1 --decide|--act --ask 在三个渠道里选一个 [--now ...]
   card.py answer D-1 [--now ...]
+  card.py approve D-1 [--note "lee：就按推荐"] [--now ...]   决策卡审批通过：结案，记下用户原话或依据
+  card.py veto D-1 --reason 费率太高 [--now ...]             决策卡审批否决：结案，必须写原因；记录保留
+                                       决策卡新建即“待审”；否决后要重新提审：move 回待办再 ask --decide
   card.py external L-1 --now 等律所书面意见
   card.py block F-3 --reason ...  /  card.py unblock F-3
   card.py move F-3 todo|doing|verify|frozen [--now ...]
@@ -39,6 +42,7 @@ REGISTRY = os.environ.get("BOARD_REGISTRY") or os.path.expanduser("~/.claude/boa
 COLUMNS = ("todo", "doing", "verify", "done", "frozen")
 COLUMN_LABEL = {"todo": "待办", "doing": "进行中", "verify": "待验收", "done": "已完成", "frozen": "冻结"}
 KINDS = ("功能", "缺陷", "调研", "决策", "事务")
+APPROVAL_LABEL = {"pending": "待审", "approved": "通过", "vetoed": "否决"}
 DONE_WINDOW_DAYS = 14  # 没有阶段时，已完成的卡在看板上留多少天
 
 _spec = importlib.util.spec_from_file_location("check_cards", os.path.join(HERE, "check-cards.py"))
@@ -166,7 +170,7 @@ def apply(state, ev):
              "now": ev.get("now", ""), "blocked": ev.get("blocked", ""),
              "since": ev.get("since") or day(at), "doneAt": ev.get("doneAt"),
              "rejects": ev.get("rejects", 0), "sessions": list(ev.get("sessions", []))}
-        for k in ("causedBy", "detail", "evidence"):
+        for k in ("causedBy", "detail", "evidence", "approval", "approvalNote", "approvalAt"):
             if ev.get(k):
                 c[k] = ev[k]
         if c["kind"] not in KINDS:
@@ -186,6 +190,10 @@ def apply(state, ev):
             c["milestone"] = ev["milestone"]
         if c["kind"] not in KINDS:
             raise CardError(f"类型只能是 {'、'.join(KINDS)}。")
+        if c["kind"] != "决策":
+            if c.get("approval") in ("approved", "vetoed"):
+                raise CardError(f"{cid} 已经审批过，不能改成非决策卡。")
+            clear_approval(c)
     elif op == "dispatch":
         c = card()
         if ev["session"] not in c["sessions"]:
@@ -222,7 +230,26 @@ def apply(state, ev):
     elif op == "ask":
         c = card()
         c["ball"], c["ask"], c["askKind"] = "you", ev["ask"], ev["askKind"]
+        if c["kind"] == "决策" and ev["askKind"] == "decide":
+            clear_approval(c)  # 重新提审：回到待审
         set_now(c)
+    elif op in ("approve", "veto"):
+        c = card()
+        if c["kind"] != "决策":
+            raise CardError(f"{cid} 不是决策卡；只有决策卡走审批。要用户批准的方案先建一张决策卡。")
+        verdict = "approved" if op == "approve" else "vetoed"
+        if c.get("approval") == verdict:
+            raise CardError(f"{cid} 已经是“{APPROVAL_LABEL[verdict]}”了。")
+        if c["column"] != "done":
+            to_column(c, "done")  # 审批即结案；已完成的旧决策卡补记审批时不动完成日期
+        c["ball"], c["ask"], c["askKind"] = "brain", "", None
+        c["approval"], c["approvalAt"] = verdict, day(at)
+        note = ev.get("note") if op == "approve" else ev["reason"]
+        if note:
+            c["approvalNote"] = note
+        else:
+            c.pop("approvalNote", None)
+        c["now"] = ev.get("now") or ("已通过" if op == "approve" else "已否决")
     elif op == "answer":
         c = card()
         c["ball"], c["ask"], c["askKind"] = "brain", "", None
@@ -245,6 +272,20 @@ def apply(state, ev):
         order.remove(cid)
     else:
         raise CardError(f"不认识的事件 {op}")
+
+
+def clear_approval(c):
+    for k in ("approval", "approvalNote", "approvalAt"):
+        c.pop(k, None)
+
+
+def approval_of(c):
+    """决策卡的审批状态：通过、否决由事件记下；没审批过的、没完成的决策卡都算待审（旧事件不带审批状态也一样）。"""
+    if c["kind"] != "决策":
+        return None
+    if c.get("approval") in ("approved", "vetoed"):
+        return c["approval"]
+    return "pending" if c["column"] != "done" else None
 
 
 def replay(events):
@@ -286,19 +327,31 @@ def build(events, on=None):
     state = replay(events)
     head = state["head"]
     keep_from = head.get("stageSince") or (on - datetime.timedelta(days=DONE_WINDOW_DAYS)).isoformat()
-    cards = []
+    cards, decided = [], []
     for cid in state["order"]:
-        c = state["cards"][cid]
+        c = dict(state["cards"][cid])
+        clear_approval(c)
+        a = approval_of(state["cards"][cid])
+        if a:
+            c["approval"] = a
+            for k in ("approvalNote", "approvalAt"):
+                if a != "pending" and state["cards"][cid].get(k):
+                    c[k] = state["cards"][cid][k]
         if c["column"] == "done" and (c.get("doneAt") or "") < keep_from:
+            if a in ("approved", "vetoed"):
+                decided.append(c)  # 审批过的决策卡不下架：看板按“通过”“否决”筛选时要查得到
             continue  # 本阶段之前完成的不上板，记录在 events.jsonl
         cards.append(c)
-    return {
+    out = {
         "generatedBy": "card.py：由 events.jsonl 生成，不要手改",
         "project": head["project"], "stage": head["stage"], "stageGoal": head["stageGoal"],
         "brain": head["brain"], "leftovers": head["leftovers"],
         "stats": stats(events, head, on),
         "cards": cards,
     }
+    if decided:
+        out["decided"] = decided
+    return out
 
 
 # ---------- 写入 ----------
@@ -383,10 +436,11 @@ def cmd_import(folder):
     elif old.get("stage"):
         out.append({"at": at, "op": "stage", "stage": old["stage"], "goal": None})
     out.append({"at": at, "op": "leftovers", "count": old.get("leftovers", 0)})
-    for c in old["cards"]:
+    for c in old["cards"] + old.get("decided", []):
         e = {"at": at, "op": "import", "card": c["id"]}
         for k in ("title", "column", "kind", "priority", "milestone", "ball", "ask", "askKind",
-                  "now", "blocked", "since", "doneAt", "detail", "rejects", "causedBy", "sessions", "evidence"):
+                  "now", "blocked", "since", "doneAt", "detail", "rejects", "causedBy", "sessions", "evidence",
+                  "approval", "approvalNote", "approvalAt"):
             if k in c and c[k] is not None:
                 e[k] = c[k]
         out.append(e)
@@ -400,7 +454,8 @@ def cmd_import(folder):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="card", description="主脑记卡片的命令；卡片文件由事件生成，不要手改。")
+    ap = argparse.ArgumentParser(prog="card", description="主脑记卡片的命令；卡片文件由事件生成，不要手改。",
+                                 epilog=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-p", "--project", help="看板登记表里的项目键")
     ap.add_argument("--dir", help="台账目录（放 cards.json 和 events.jsonl 的目录）")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -427,6 +482,10 @@ def main(argv=None):
     s = sub.add_parser("ask"); s.add_argument("id"); g = s.add_mutually_exclusive_group(required=True)
     g.add_argument("--decide", action="store_true"); g.add_argument("--act", action="store_true")
     s.add_argument("--ask", required=True); s.add_argument("--now")
+    s = sub.add_parser("approve", help="决策卡审批通过"); s.add_argument("id")
+    s.add_argument("--note", help="用户原话或依据"); s.add_argument("--now")
+    s = sub.add_parser("veto", help="决策卡审批否决"); s.add_argument("id")
+    s.add_argument("--reason", required=True, help="否决原因"); s.add_argument("--now")
     s = sub.add_parser("external"); s.add_argument("id"); s.add_argument("--now", required=True)
     s = sub.add_parser("block"); s.add_argument("id"); s.add_argument("--reason", required=True)
     s = sub.add_parser("move"); s.add_argument("id"); s.add_argument("column", choices=("todo", "doing", "verify", "frozen"))
@@ -472,6 +531,9 @@ def main(argv=None):
         elif c == "reject":
             data = commit(folder, [ev(c, a.id, reason=a.reason)])
         elif c == "done":
+            cur = replay(read_events(folder))["cards"].get(a.id)
+            if cur and approval_of(cur) == "pending":
+                raise CardError(f"{a.id} 是待审的决策卡：用户通过用 approve，否决用 veto；作废用 drop。")
             if a.evidence is not None:
                 check_evidence(folder, a.evidence)
             data = commit(folder, [ev(c, a.id, evidence=a.evidence, review=True if a.review else None, now=a.now)])
@@ -479,6 +541,12 @@ def main(argv=None):
             data = commit(folder, [ev(c, a.id)])
         elif c == "ask":
             data = commit(folder, [ev(c, a.id, ask=a.ask, askKind="decide" if a.decide else "act", now=a.now)])
+        elif c == "approve":
+            data = commit(folder, [ev(c, a.id, note=a.note or None, now=a.now)])
+        elif c == "veto":
+            if not a.reason.strip():
+                raise CardError("否决要写原因（--reason）。")
+            data = commit(folder, [ev(c, a.id, reason=a.reason, now=a.now)])
         elif c == "external":
             data = commit(folder, [ev(c, a.id, now=a.now)])
         elif c == "block":
@@ -527,7 +595,7 @@ def main(argv=None):
 
 
 OP_LABEL = {"new": "建卡", "import": "导入", "dispatch": "派活", "link": "关联会话", "verify": "回报待验收",
-            "reject": "打回", "done": "完成", "review": "请用户看", "ask": "请用户", "answer": "用户已答复", "external": "等外部",
+            "reject": "打回", "done": "完成", "review": "请用户看", "ask": "请用户", "answer": "用户已答复", "approve": "审批通过", "veto": "审批否决", "external": "等外部",
             "block": "阻塞", "unblock": "解除阻塞", "move": "换列", "edit": "修改", "drop": "拿掉",
             "stage": "阶段目标", "brain": "换主脑", "leftovers": "遗留小项", "project": "建项目"}
 
@@ -540,6 +608,8 @@ def print_log(events, days):
         extra = e.get("reason") or e.get("ask") or e.get("now") or e.get("title") or e.get("goal") or e.get("column") or ""
         if e["op"] == "dispatch":
             extra = f"会话 {e['session']}" + (f"；{e['now']}" if e.get("now") else "")
+        if e["op"] == "approve":
+            extra = e.get("note") or ""
         if e["op"] == "done" and e.get("evidence"):
             extra = f"产物 {e['evidence']}"
         print(f"- {e['at'][5:16].replace('T', ' ')} {e.get('card', '')} {OP_LABEL.get(e['op'], e['op'])}" + (f"：{extra}" if extra else ""))
@@ -548,15 +618,29 @@ def print_log(events, days):
 
 def print_cards(data):
     s = data["stats"]["week"]
-    print(f"{data['project']}｜阶段：{data['stage'] or '未定'}｜近 7 天 完成 {s['done']}、打回 {s['rejects']}、返工 {s['rework']}")
+    pend = sum(1 for c in data["cards"] if c.get("approval") == "pending" and c["column"] != "frozen")
+    print(f"{data['project']}｜阶段：{data['stage'] or '未定'}｜待审 {pend}｜近 7 天 完成 {s['done']}、打回 {s['rejects']}、返工 {s['rework']}")
     for col in COLUMNS:
         cs = [c for c in data["cards"] if c["column"] == col]
         if not cs:
             continue
         print(f"{COLUMN_LABEL[col]}（{len(cs)}）")
         for c in cs:
-            tag = {"you": "【等用户】", "external": "【等外部】"}.get(c["ball"], "")
-            print(f"  {c['id']} {c['title']} {tag}{c['now']}")
+            print(f"  {c['id']} {c['title']} {tag_of(c)}{c['now']}")
+    old = data.get("decided", [])
+    if old:
+        print(f"更早审批过的决策（{len(old)}）")
+        for c in old:
+            print(f"  {c['id']} {c['title']} {tag_of(c)}{c.get('approvalNote') or c['now']}")
+
+
+def tag_of(c):
+    """给用户看的状态标记：要用户审批的一律叫“待审”。"""
+    if c.get("approval"):
+        return f"【{APPROVAL_LABEL[c['approval']]}】"
+    if c["ball"] == "you" and c["column"] != "done":
+        return "【待审】" if c.get("askKind") == "decide" else "【等你动手】"
+    return "【等外部】" if c["ball"] == "external" and c["column"] != "done" else ""
 
 
 if __name__ == "__main__":

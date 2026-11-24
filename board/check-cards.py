@@ -15,10 +15,12 @@ KINDS = ("功能", "缺陷", "调研", "决策", "事务")
 BALLS = ("you", "external", "brain")
 ASK_KINDS = ("decide", "act")
 TOP_KEYS = ("project", "stage", "stageGoal", "brain", "leftovers", "cards")
-TOP_OPTIONAL = ("generatedBy", "stats")
+TOP_OPTIONAL = ("generatedBy", "stats", "decided")
+APPROVALS = ("pending", "approved", "vetoed")
 CARD_KEYS = ("id", "title", "column", "kind", "priority", "milestone", "ball",
              "ask", "askKind", "now", "blocked", "since", "doneAt")
-CARD_OPTIONAL = ("detail", "rejects", "causedBy", "sessions", "evidence", "review")
+CARD_OPTIONAL = ("detail", "rejects", "causedBy", "sessions", "evidence", "review",
+                 "approval", "approvalNote", "approvalAt")
 TITLE_MAX = 20
 ASK_MAX = 40
 NOW_MAX = 40
@@ -140,7 +142,35 @@ def check_card(c, where, today, has_goal):
             problems.append(f"{where}：review（请用户看）只能是 true；不请用户看就不写。")
         elif c.get("column") != "done" or not is_str(c.get("evidence")):
             problems.append(f"{where}：只有已完成、带验证产物的卡能标 review（请用户看）。")
+    problems.extend(check_approval(c, where, today))
     return problems
+
+
+def check_approval(c, where, today):
+    """审批状态：只有决策卡有；待审不带结论，通过要有日期，否决还要有原因。"""
+    if not any(k in c for k in ("approval", "approvalNote", "approvalAt")):
+        return []
+    a = c.get("approval")
+    if a not in APPROVALS:
+        return [f"{where}：approval（审批状态）只能是 pending 待审、approved 通过、vetoed 否决。"]
+    out = []
+    if c.get("kind") != "决策":
+        out.append(f"{where}：只有决策卡有审批状态。")
+    if a == "pending":
+        if c.get("column") == "done":
+            out.append(f"{where}：待审的决策卡不能是已完成；用 approve 或 veto 结案。")
+        if "approvalNote" in c or "approvalAt" in c:
+            out.append(f"{where}：待审的卡不写 approvalNote、approvalAt。")
+        return out
+    p = date_problem(c.get("approvalAt"), today)
+    if p:
+        out.append(f"{where}：审批过的卡要写 approvalAt（审批日期），{p}。")
+    note = c.get("approvalNote")
+    if note is not None and not is_str(note):
+        out.append(f"{where}：approvalNote 要是文字。")
+    if a == "vetoed" and (not is_str(note) or not note.strip()):
+        out.append(f"{where}：否决的卡必须写 approvalNote（否决原因）。")
+    return out
 
 
 def check_data(data, today=None):
@@ -177,8 +207,12 @@ def check_data(data, today=None):
     if not isinstance(cards, list):
         problems.append("cards 要是列表，没有卡片就写 []。")
         return problems
+    decided = data.get("decided", [])
+    if not isinstance(decided, list):
+        problems.append("decided（更早审批过的决策卡）要是列表。")
+        decided = []
     seen = set()
-    for i, c in enumerate(cards, 1):
+    for i, c in enumerate(cards + decided, 1):
         cid = c.get("id") if isinstance(c, dict) else None
         where = f"第 {i} 张卡片" + (f"（{cid}）" if is_str(cid) and cid else "")
         if isinstance(c, dict):
@@ -189,6 +223,8 @@ def check_data(data, today=None):
             else:
                 seen.add(cid)
         problems.extend(check_card(c, where, today, has_goal))
+        if i > len(cards) and isinstance(c, dict) and (c.get("column") != "done" or c.get("approval") not in ("approved", "vetoed")):
+            problems.append(f"{where}：decided 里只放已完成、审批过（通过或否决）的决策卡。")
     return problems
 
 

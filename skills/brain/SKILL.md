@@ -74,6 +74,7 @@ commit message 用 `docs(brain): <动作>`，完整历史交给 git，不在台�
 | 合入 | `done <编号> --evidence <验证产物路径> [--review]`：功能类、缺陷类必带产物；产物必须是存在的文件或目录（录屏、截图、报告），提交号写进 `--now`。**需要用户亲眼确认的才加 `--review`**（有录屏截图、用户能看到行为变化），看板首屏的“待你看”只收这类；内部修补、调研、配置类不加。事后要补用 `review <编号>` |
 | 等用户 | `ask <编号> --decide 或 --act --ask <一个动作，动词开头，40 字内>`；拍板类的完整决策栏用 `edit <编号> --detail ...` 记下 |
 | 用户答复了 | `answer <编号> --now <结论>` |
+| 决策卡用户定了 | 通过：`approve <编号> --note <用户原话，带日期>`；否决：`veto <编号> --reason <原因>`。两者都结案、永久留记录；决策卡不用 `done`。新建的决策卡默认待审，看板上一律叫“待审” |
 | 等外部 | `external <编号> --now <在等谁、等什么>` |
 | 卡住 / 解除 | `block <编号> --reason ...` / `unblock <编号>` |
 | 换列、改字段 | `move <编号> todo/doing/verify/frozen`、`edit <编号> --title/--kind/--priority/--milestone yes 或 no/--now/--detail` |

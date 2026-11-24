@@ -31,8 +31,10 @@ python3 ~/.claude/bin/card --help
 | `reject <编号> --reason` | 打回：打回次数加一，移回进行中，现状写成打回原因 |
 | `done <编号> [--evidence <产物路径>] [--review] [--now]` | 合入：移到已完成，记下验证产物；`--review` 请用户看（看板首屏“待你看”） |
 | `review <编号>` | 给已完成、带产物的卡补上“请用户看” |
-| `ask <编号> --decide 或 --act --ask <动作>` | 球交给用户：拍板或动手 |
+| `ask <编号> --decide 或 --act --ask <动作>` | 球交给用户：拍板（看板上叫“待审”）或动手；决策卡 `--decide` 等于重新提审，回到待审 |
 | `answer <编号> [--now]` | 用户答复了，球回到主脑 |
+| `approve <编号> [--note <用户原话或依据>] [--now]` | 决策卡审批通过：结案（移到已完成），记下通过依据和日期 |
+| `veto <编号> --reason <原因> [--now]` | 决策卡审批否决：结案，原因必填；记录保留。要重新提审：`move` 回待办再 `ask --decide` |
 | `external <编号> --now` | 等外部 |
 | `block <编号> --reason` / `unblock <编号>` | 卡住 / 解除 |
 | `move <编号> <列>`、`edit <编号> ...` | 换列；改标题、类型、优先级、阶段目标标记、现状、详情 |
@@ -50,6 +52,7 @@ python3 ~/.claude/bin/card --help
 - 只有缺陷卡能写返工来源；
 - 验证产物必须是存在的文件或目录（绝对路径，或相对仓库根目录）；提交号、说明文字写进现状；
 - 只有已完成、带产物的卡能标“请用户看”；卡被重开（打回、换列）时这个标记自动去掉。
+- 只有决策卡走审批；待审的决策卡不能用 `done` 结案，要用 `approve` 或 `veto`（作废用 `drop`）；否决必须写原因；同一结论不重复记。
 
 时间取执行时刻；测试时可用环境变量 `CARD_NOW` 指定。
 
@@ -68,8 +71,9 @@ python3 ~/.claude/bin/card --help
 | `stage`、`stageGoal` | 当前阶段和阶段目标；没有为 `null` |
 | `stats` | 信任指标：`week` 是近 7 天，`stage` 是本阶段（有阶段目标时）；各含 `done` 完成、`rejects` 打回、`rework` 返工、`dispatched` 派出件数和起算日期 `since` |
 | `cards` | 卡片列表 |
+| `decided` | 更早审批过的决策卡（只在有时出现）：已完成、通过或否决、已过了上板期限的。看板按“通过”“否决”筛选时用，不进分列看板 |
 
-上板的卡：所有没完成的；已完成的只留本阶段内完成的（没有阶段目标时留最近 14 天）。更早的从看板上下来，记录还在事件里。
+上板的卡：所有没完成的；已完成的只留本阶段内完成的（没有阶段目标时留最近 14 天）。更早的从看板上下来，记录还在事件里；其中审批过的决策卡放进 `decided`，好让用户查到以前定过什么。
 
 每张卡：
 
@@ -84,6 +88,8 @@ python3 ~/.claude/bin/card --help
 | `rejects`、`causedBy` | 打回次数；返工来源（只有缺陷卡有） |
 | `sessions`、`evidence` | 对应的会话编号；验证产物路径（相对仓库根目录或绝对路径） |
 | `review` | 主脑请用户看（只在为 `true` 时出现）。看板首屏“待你看”只收这类，完成 7 天内、用户没点“看过了”的 |
+| `approval` | 审批状态，只有决策卡有：`pending` 待审、`approved` 通过、`vetoed` 否决。由命令算出：用 `approve`、`veto` 记过的取记下的结论；没记过的，没完成就算待审（旧事件不带审批状态，照此兼容），已完成的不标 |
+| `approvalNote`、`approvalAt` | 通过的依据（用户原话）或否决原因；审批日期。待审时没有 |
 | `detail` | 主脑自用的详情，看板不显示 |
 
 示例（`board/check-cards.py` 和用例都以它为准）：
@@ -107,7 +113,8 @@ python3 ~/.claude/bin/card --help
       "ask": "在三个渠道里选一个", "askKind": "decide",
       "now": "三个渠道的费率和接入周期已查清", "blocked": "",
       "since": "2026-11-10", "doneAt": null, "rejects": 0, "sessions": [],
-      "detail": "需求：……；选项：1……2……3……；推荐：……；代价：……；能否撤回：……"
+      "detail": "需求：……；选项：1……2……3……；推荐：……；代价：……；能否撤回：……",
+      "approval": "pending"
     },
     {
       "id": "F-3", "title": "下单流程", "column": "doing", "kind": "功能",
@@ -131,6 +138,14 @@ python3 ~/.claude/bin/card --help
       "ask": "", "askKind": null,
       "now": "已定位到缓存配置，修复中", "blocked": "",
       "since": "2026-11-11", "doneAt": null, "rejects": 0, "sessions": [], "causedBy": "F-1"
+    },
+    {
+      "id": "D-0", "title": "测试环境用哪家云", "column": "done", "kind": "决策",
+      "priority": null, "milestone": false, "ball": "brain",
+      "ask": "", "askKind": null,
+      "now": "已通过", "blocked": "",
+      "since": "2026-11-09", "doneAt": "2026-11-09", "rejects": 0, "sessions": [],
+      "approval": "approved", "approvalNote": "lee：用已有账号的那家", "approvalAt": "2026-11-09"
     }
   ]
 }

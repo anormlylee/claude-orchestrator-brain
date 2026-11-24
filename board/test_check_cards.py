@@ -72,7 +72,9 @@ class Format(unittest.TestCase):
         self.assertIn("rejects", joined(with_card(rejects="2")))
         self.assertIn("只有缺陷卡能写 causedBy", joined(with_card(causedBy="F-1")))
         self.assertIn("causedBy 要写", joined(with_card(kind="缺陷", causedBy="")))
-        self.assertEqual(problems(with_card(kind="缺陷", causedBy="F-1")), [])
+        d = with_card(kind="缺陷", causedBy="F-1")
+        del d["cards"][0]["approval"]
+        self.assertEqual(problems(d), [])
 
     def test_enums(self):
         self.assertIn("column 只能是", joined(with_card(column="待办")))
@@ -105,7 +107,7 @@ class Format(unittest.TestCase):
         self.assertIn("必须写 askKind", joined(with_card(askKind=None)))
         # 已完成的卡不再要求
         d = example()
-        d["cards"][0].update(column="done", ask="", askKind=None, doneAt="2026-11-11")
+        d["cards"][0].update(column="done", ask="", askKind=None, doneAt="2026-11-11", approval="approved", approvalAt="2026-11-11")
         self.assertEqual(problems(d), [])
 
     def test_milestone_needs_stage_goal(self):
@@ -115,6 +117,32 @@ class Format(unittest.TestCase):
         for c in d["cards"]:
             c["milestone"] = False
         self.assertEqual(problems(d), [])
+
+    def test_approval(self):
+        self.assertIn("approval（审批状态）只能是", joined(with_card(approval="通过")))
+        d = example()
+        d["cards"][1]["approval"] = "pending"
+        self.assertIn("只有决策卡有审批状态", joined(d))
+        self.assertIn("待审的决策卡不能是已完成", joined(with_card(column="done", doneAt="2026-11-11")))
+        self.assertIn("待审的卡不写", joined(with_card(approvalNote="x")))
+        d = with_card(column="done", doneAt="2026-11-11", approval="vetoed", approvalAt="2026-11-11")
+        self.assertIn("否决的卡必须写 approvalNote", joined(d))
+        d["cards"][0]["approvalNote"] = "费率太高"
+        self.assertEqual(problems(d), [])
+        del d["cards"][0]["approvalAt"]
+        self.assertIn("approvalAt", joined(d))
+
+    def test_decided(self):
+        d = example()
+        d["decided"] = [d["cards"].pop()]  # 更早审批过的决策卡
+        self.assertEqual(problems(d), [])
+        d["decided"].append(dict(d["cards"][2], id="F-0"))
+        self.assertIn("decided 里只放", joined(d))
+        d = example()
+        d["decided"] = [dict(d["cards"][-1])]
+        self.assertIn("id 和前面的卡片重复", joined(d))
+        d["decided"] = {}
+        self.assertIn("decided", joined(d))
 
     def test_dates(self):
         self.assertIn("YYYY-MM-DD", joined(with_card(since="11-10")))

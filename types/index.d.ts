@@ -29,7 +29,15 @@ export type Card = {
   evidence?: string
   // 主脑请用户看：看板首屏“待你看”只收这类
   review?: boolean
+  // 决策卡的审批状态：pending 待审、approved 通过、vetoed 否决
+  approval?: Approval
+  // 通过的依据（用户原话）或否决原因
+  approvalNote?: string
+  // 审批日期
+  approvalAt?: string
 }
+
+export type Approval = 'pending' | 'approved' | 'vetoed'
 
 export type Window = { since: string; done: number; rejects: number; rework: number; dispatched: number }
 
@@ -40,6 +48,8 @@ export type Project = {
   brain: { name: string; id: string }
   leftovers: number
   cards: Card[]
+  // 已经下板、但审批过（通过或否决）的决策卡：按审批状态筛选时要查得到
+  decided?: Card[]
   stats?: { week: Window; stage?: Window }
 }
 
@@ -61,6 +71,8 @@ declare module 'claude-code' {
       fold: Record<string, 'open' | 'closed' | 'all'>
       // 项目页已完成列是否显示全部
       showAllDone: boolean
+      // 项目页按审批状态筛选：all 全部卡片，其余只看该审批状态的决策卡
+      approvalTab: string
       prevVisit: number
       rev: number
     }
